@@ -11,8 +11,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF
-from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QPropertyAnimation, QEasingCurve, QUrl
+from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QLinearGradient, QPen, QBrush, QDesktopServices
 from PyQt6.QtWidgets import (
     QTextBrowser,
     QPlainTextEdit,
@@ -41,7 +41,10 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QSizePolicy,
     QGraphicsDropShadowEffect,
-    QInputDialog
+    QInputDialog,
+    QGraphicsOpacityEffect,
+    QToolButton,
+    QMenu
 )
 
 from telethon import TelegramClient
@@ -131,6 +134,170 @@ def apply_shadow(widget: QWidget, blur: int = 24, alpha: int = 160, offset: QPoi
     shadow.setColor(QColor(0, 0, 0, alpha))
     shadow.setOffset(offset)
     widget.setGraphicsEffect(shadow)
+
+def configure_table(widget):
+    try:
+        widget.setFrameShape(QFrame.Shape.NoFrame)
+    except Exception:
+        pass
+    try:
+        widget.setCornerButtonEnabled(False)
+    except Exception:
+        pass
+    try:
+        widget.setShowGrid(True)
+    except Exception:
+        pass
+    try:
+        widget.verticalHeader().setVisible(False)
+    except Exception:
+        pass
+    try:
+        widget.setAlternatingRowColors(True)
+    except Exception:
+        pass
+    try:
+        pal = widget.palette()
+        pal.setColor(pal.ColorRole.Base, QColor(10, 16, 30))
+        pal.setColor(pal.ColorRole.AlternateBase, QColor(14, 20, 36))
+        pal.setColor(pal.ColorRole.Text, QColor(230, 237, 243))
+        widget.setPalette(pal)
+    except Exception:
+        pass
+    try:
+        widget.horizontalHeader().setStretchLastSection(True)
+    except Exception:
+        pass
+    try:
+        widget.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    except Exception:
+        pass
+    try:
+        widget.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        widget.horizontalHeader().setStyleSheet("QHeaderView::section{background: rgba(8,12,22,0.80); color: rgba(230,237,243,0.80); border: none; border-radius: 0px; padding: 8px;}")
+        widget.verticalHeader().setStyleSheet("QHeaderView::section{background: rgba(8,12,22,0.80); color: rgba(230,237,243,0.80); border: none; border-radius: 0px; padding: 8px;}")
+    except Exception:
+        pass
+    try:
+        widget.setTextElideMode(Qt.TextElideMode.ElideRight)
+    except Exception:
+        pass
+    try:
+        widget.setWordWrap(False)
+    except Exception:
+        pass
+    try:
+        widget.setStyleSheet(widget.styleSheet() + " QTableView{border-radius:24px;} QTreeView{border-radius:24px;} QTableView::viewport{border-radius:24px;} QTreeView::viewport{border-radius:24px;} QHeaderView::section{border-radius:0px;}")
+    except Exception:
+        pass
+
+def animate_fade(widget: QWidget, start: float = 0.0, end: float = 1.0, duration: int = 260):
+    if widget is None:
+        return
+    effect = widget.graphicsEffect()
+    if not isinstance(effect, QGraphicsOpacityEffect):
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+    effect.setOpacity(start)
+    anim = QPropertyAnimation(effect, b"opacity", widget)
+    anim.setStartValue(start)
+    anim.setEndValue(end)
+    anim.setDuration(duration)
+    anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+    anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+def animate_section_fade(widget: QWidget, duration: int = 220):
+    if widget is None:
+        return
+    effect = QGraphicsOpacityEffect(widget)
+    widget.setGraphicsEffect(effect)
+    effect.setOpacity(0.0)
+    anim = QPropertyAnimation(effect, b"opacity", widget)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setDuration(duration)
+    anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+    def _cleanup():
+        widget.setGraphicsEffect(None)
+    anim.finished.connect(_cleanup)
+    anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+def animate_button_press(btn: QWidget, duration: int = 160):
+    if btn is None or not btn.isVisible():
+        return
+    effect = btn.graphicsEffect()
+    if not isinstance(effect, QGraphicsOpacityEffect):
+        effect = QGraphicsOpacityEffect(btn)
+        btn.setGraphicsEffect(effect)
+    effect.setOpacity(1.0)
+    anim = QPropertyAnimation(effect, b"opacity", btn)
+    anim.setStartValue(1.0)
+    anim.setKeyValueAt(0.5, 0.82)
+    anim.setEndValue(1.0)
+    anim.setDuration(duration)
+    anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+    def _cleanup():
+        btn.setGraphicsEffect(None)
+    anim.finished.connect(_cleanup)
+    anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+def animate_evaporate_rect(parent: QWidget, rect: QRect, on_done=None):
+    if parent is None or rect.isNull():
+        if on_done:
+            on_done()
+        return
+    overlay = QFrame(parent)
+    overlay.setStyleSheet("background: rgba(120, 160, 255, 0.20); border-radius: 10px;")
+    overlay.setGeometry(rect)
+    overlay.show()
+    effect = QGraphicsOpacityEffect(overlay)
+    overlay.setGraphicsEffect(effect)
+    effect.setOpacity(1.0)
+    fade = QPropertyAnimation(effect, b"opacity", overlay)
+    fade.setStartValue(1.0)
+    fade.setKeyValueAt(0.65, 0.55)
+    fade.setEndValue(0.0)
+    fade.setDuration(320)
+    fade.setEasingCurve(QEasingCurve.Type.InOutCubic)
+    shrink = QPropertyAnimation(overlay, b"geometry", overlay)
+    shrink.setStartValue(rect)
+    target = QRect(rect.center().x(), rect.center().y(), 2, 2)
+    shrink.setEndValue(target)
+    shrink.setDuration(320)
+    shrink.setEasingCurve(QEasingCurve.Type.InOutCubic)
+    glow = QPropertyAnimation(overlay, b"windowOpacity", overlay)
+    glow.setStartValue(1.0)
+    glow.setKeyValueAt(0.5, 0.85)
+    glow.setEndValue(0.0)
+    glow.setDuration(320)
+    glow.setEasingCurve(QEasingCurve.Type.InOutCubic)
+    def _finish():
+        overlay.deleteLater()
+        if on_done:
+            on_done()
+    fade.finished.connect(_finish)
+    fade.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+    shrink.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+    glow.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+def animate_press(widget: QWidget, duration: int = 120, delta: int = 2):
+    if widget is None or not widget.isVisible():
+        return
+    geo = widget.geometry()
+    target = geo.adjusted(delta, delta, -delta, -delta)
+    anim = QPropertyAnimation(widget, b"geometry", widget)
+    anim.setDuration(duration)
+    anim.setKeyValueAt(0.0, geo)
+    anim.setKeyValueAt(0.5, target)
+    anim.setKeyValueAt(1.0, geo)
+    anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+    anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+class ActionAnimator(QObject):
+    def eventFilter(self, obj, event):
+        if event.type() == event.Type.MouseButtonPress and isinstance(obj, (QPushButton, QToolButton)):
+            animate_button_press(obj)
+        return super().eventFilter(obj, event)
 
 def show_message(parent: QWidget, title: str, text: str):
     dlg = StyledDialog(parent, title)
@@ -243,6 +410,8 @@ class AutoConfig:
     freeze_threshold_seconds: int = 350
     force_setuserpic_delay1: float = 1.0
     force_setuserpic_delay2: float = 1.0
+    first_run_done: bool = False
+    language: str = "Русский"
 
     def tokens_txt_path(self) -> Path:
         p = Path(self.tokens_txt)
@@ -319,6 +488,7 @@ class PremiumTitleBar(QFrame):
         super().__init__(parent)
         self._win = parent
         self.setObjectName("PremiumTitleBar")
+        self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(10)
@@ -327,6 +497,12 @@ class PremiumTitleBar(QFrame):
         self.title_lbl.setObjectName("TitleBarText")
         lay.addWidget(self.title_lbl)
         lay.addStretch(1)
+
+        btn_wrap = QWidget()
+        btn_wrap.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        btn_lay = QHBoxLayout(btn_wrap)
+        btn_lay.setContentsMargins(0, 0, 0, 0)
+        btn_lay.setSpacing(10)
 
         self.btn_min = QPushButton("")
         self.btn_min.setObjectName("WinBtn")
@@ -350,9 +526,10 @@ class PremiumTitleBar(QFrame):
         self.btn_max.clicked.connect(self._toggle_max)
         self.btn_close.clicked.connect(self._win.close)
 
-        lay.addWidget(self.btn_min)
-        lay.addWidget(self.btn_max)
-        lay.addWidget(self.btn_close)
+        btn_lay.addWidget(self.btn_min)
+        btn_lay.addWidget(self.btn_max)
+        btn_lay.addWidget(self.btn_close)
+        lay.addWidget(btn_wrap, 0, Qt.AlignmentFlag.AlignRight)
 
         self._drag_pos: Optional[QPoint] = None
 
@@ -429,6 +606,10 @@ class StyledDialog(QDialog):
 
         self._drag_pos: Optional[QPoint] = None
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        animate_fade(self.card, 0.0, 1.0, 160)
+
     def set_body_layout(self, layout: QVBoxLayout):
         while self.body.count():
             item = self.body.takeAt(0)
@@ -453,6 +634,208 @@ class StyledDialog(QDialog):
     def mouseReleaseEvent(self, e):
         self._drag_pos = None
         super().mouseReleaseEvent(e)
+
+class FirstRunDialog(QDialog):
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("FirstRunDialog")
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setModal(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedSize(720, 360)
+        self.selected_language = "Русский"
+        self.launch_onboarding = True
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self.card = QFrame()
+        self.card.setObjectName("FirstRunCard")
+        apply_shadow(self.card, blur=28, alpha=180, offset=QPointF(0, 8))
+        card_lay = QVBoxLayout(self.card)
+        card_lay.setContentsMargins(24, 22, 24, 22)
+        card_lay.setSpacing(14)
+
+        title = QLabel("Добро пожаловать в BotFactory!")
+        title.setObjectName("OverlayTitle")
+        subtitle = QLabel("Давайте настроим приложение под вас. Это меню показывается только один раз.")
+        subtitle.setWordWrap(True)
+        subtitle.setObjectName("Hint")
+
+        lang_row = QHBoxLayout()
+        lang_lbl = QLabel("Язык приложения:")
+        lang_lbl.setObjectName("Hint")
+        self.lang = QComboBox()
+        self.lang.setObjectName("Input")
+        self.lang.addItems(["Русский", "English"])
+        self.lang.currentTextChanged.connect(self._on_lang)
+        lang_row.addWidget(lang_lbl)
+        lang_row.addWidget(self.lang, 1)
+
+        self.onboarding_check = QCheckBox("Запустить мастер новичка после входа")
+        self.onboarding_check.setChecked(True)
+        self.onboarding_check.stateChanged.connect(self._on_onboarding_toggle)
+
+        btn_row = QHBoxLayout()
+        start = QPushButton("Продолжить")
+        start.setObjectName("PrimaryBtn")
+        start.clicked.connect(self.accept)
+        btn_row.addStretch(1)
+        btn_row.addWidget(start)
+
+        card_lay.addWidget(title)
+        card_lay.addWidget(subtitle)
+        card_lay.addLayout(lang_row)
+        card_lay.addWidget(self.onboarding_check)
+        card_lay.addLayout(btn_row)
+
+        outer.addStretch(1)
+        outer.addWidget(self.card)
+        outer.addStretch(1)
+
+    def _on_lang(self, text: str):
+        self.selected_language = text
+
+    def _on_onboarding_toggle(self, state: int):
+        self.launch_onboarding = state == Qt.CheckState.Checked
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        animate_fade(self.card, 0.0, 1.0, 180)
+
+class OnboardingOverlay(QWidget):
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("OnboardingOverlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.steps = []
+        self.step_index = 0
+        self.on_step_changed = None
+        self.target_widget: Optional[QWidget] = None
+        self._last_target: Optional[QWidget] = None
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 24, 24, 24)
+        lay.setSpacing(12)
+
+        lay.addStretch(1)
+        self.card = QFrame()
+        self.card.setObjectName("OverlayCard")
+        apply_shadow(self.card, blur=30, alpha=180, offset=QPointF(0, 8))
+        card_lay = QVBoxLayout(self.card)
+        card_lay.setContentsMargins(28, 24, 28, 24)
+        card_lay.setSpacing(16)
+
+        self.title = QLabel("")
+        self.title.setObjectName("OverlayTitle")
+        self.title.setMinimumHeight(28)
+        self.text = QLabel("")
+        self.text.setWordWrap(True)
+        self.text.setObjectName("OverlayText")
+        self.text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.text.setMinimumWidth(520)
+        self.text.setMinimumHeight(140)
+        self.text.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.text.setTextFormat(Qt.TextFormat.PlainText)
+        self.text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        nav = QHBoxLayout()
+        nav.setSpacing(12)
+        nav.setContentsMargins(0, 8, 0, 0)
+        self.back = QPushButton("Назад")
+        self.back.setObjectName("SecondaryBtn")
+        self.next = QPushButton("Далее")
+        self.next.setObjectName("PrimaryBtn")
+        self.close_btn = QPushButton("Закрыть")
+        self.close_btn.setObjectName("SecondaryBtn")
+        for btn in (self.back, self.next, self.close_btn):
+            btn.setMinimumWidth(120)
+            btn.setFixedHeight(36)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        nav.addWidget(self.back)
+        nav.addWidget(self.next)
+        nav.addStretch(1)
+        nav.addWidget(self.close_btn)
+
+        self.back.clicked.connect(self.prev_step)
+        self.next.clicked.connect(self.next_step)
+        self.close_btn.clicked.connect(self.close_overlay)
+
+        card_lay.addWidget(self.title)
+        card_lay.addWidget(self.text)
+        card_lay.addLayout(nav)
+        lay.addWidget(self.card, 0, Qt.AlignmentFlag.AlignCenter)
+        lay.addStretch(1)
+
+    def set_target_widget(self, widget: Optional[QWidget]):
+        if self._last_target is not None:
+            self._last_target.setProperty("onboarding", "false")
+            self._last_target.style().unpolish(self._last_target)
+            self._last_target.style().polish(self._last_target)
+        self.target_widget = widget
+        self._last_target = widget
+        if widget is not None:
+            widget.setProperty("onboarding", "true")
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+
+    def set_steps(self, steps: List[Tuple[str, str]]):
+        self.steps = steps
+        self.step_index = 0
+        self._apply_step()
+
+    def _apply_step(self):
+        if not self.steps:
+            return
+        title, body = self.steps[self.step_index]
+        try:
+            self.text.setGraphicsEffect(None)
+            self.title.setGraphicsEffect(None)
+        except Exception:
+            pass
+        self.title.setText(title)
+        self.text.setText(body)
+        self.text.adjustSize()
+        self.back.setEnabled(self.step_index > 0)
+        self.next.setText("Готово" if self.step_index >= len(self.steps) - 1 else "Далее")
+        animate_fade(self.text, 1.0, 1.0, 1)
+        animate_fade(self.title, 1.0, 1.0, 1)
+        self.text.setGraphicsEffect(None)
+        self.title.setGraphicsEffect(None)
+        if callable(self.on_step_changed):
+            self.on_step_changed(self.step_index)
+
+    def next_step(self):
+        if self.step_index >= len(self.steps) - 1:
+            self.close_overlay()
+            return
+        self.step_index += 1
+        self._apply_step()
+
+    def prev_step(self):
+        if self.step_index <= 0:
+            return
+        self.step_index -= 1
+        self._apply_step()
+
+    def open_overlay(self):
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setGeometry(self.parentWidget().rect())
+        self.show()
+        animate_fade(self.card, 0.0, 1.0, 180)
+
+    def close_overlay(self):
+        if self._last_target is not None:
+            self._last_target.setProperty("onboarding", "false")
+            self._last_target.style().unpolish(self._last_target)
+            self._last_target.style().polish(self._last_target)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.hide()
+        self.move(0, 0)
+        self.setGeometry(self.parentWidget().rect())
 
 class LogBox(QFrame):
     def __init__(self):
@@ -517,6 +900,7 @@ class LogBox(QFrame):
         self.text.appendPlainText(s)
         sb = self.text.verticalScrollBar()
         sb.setValue(sb.maximum())
+        animate_fade(self.text, 0.85, 1.0, 180)
 
 class Worker(QThread):
 
@@ -838,19 +1222,39 @@ class ManualPage(QWidget):
         self.bot_name.setPlaceholderText("Имя бота (можно emoji)")
         self.bot_username.setPlaceholderText("Username (пример: mybot_bot)")
 
+        emoji_btn = QToolButton()
+        emoji_btn.setObjectName("EmojiBtn")
+        emoji_btn.setText("😀")
+        emoji_menu = QMenu(emoji_btn)
+        for emo in ["😀", "😎", "✨", "🔥", "🚀", "❤️", "🎉", "🤖", "🌟", "💎", "🧠", "🫶"]:
+            act = emoji_menu.addAction(emo)
+            act.triggered.connect(lambda checked=False, e=emo: self.bot_name.insert(e))
+        emoji_btn.setMenu(emoji_menu)
+        emoji_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        emoji_btn.setToolTip("Добавить emoji в имя")
+
         form = QFormLayout()
         form.setHorizontalSpacing(16)
         form.setVerticalSpacing(6)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form.addRow(QLabel("Чат:"), self.chat)
-        form.addRow(QLabel("Имя:"), self.bot_name)
+        name_wrap = QWidget()
+        name_row = QHBoxLayout(name_wrap)
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.addWidget(self.bot_name, 1)
+        name_row.addWidget(emoji_btn)
+        form.addRow(QLabel("Имя:"), name_wrap)
         form.addRow(QLabel("Username:"), self.bot_username)
 
         row = QHBoxLayout()
         self.pick_img = QPushButton("Выбрать картинку"); self.pick_img.setObjectName("PrimaryBtn")
         self.pick_img.clicked.connect(self.ui.pick_image)
-        row.addWidget(self.pick_img); row.addStretch(1)
+        self.open_tokens = QPushButton("Открыть tokens.txt"); self.open_tokens.setObjectName("SecondaryBtn")
+        self.open_tokens.clicked.connect(self.ui.open_tokens_txt)
+        row.addWidget(self.pick_img)
+        row.addWidget(self.open_tokens)
+        row.addStretch(1)
 
         btn_row = QHBoxLayout()
         self.start = QPushButton("Запуск (Ручной режим)"); self.start.setObjectName("PrimaryBtn")
@@ -898,9 +1302,19 @@ class AutoPage(QWidget):
         row = QHBoxLayout()
         self.pick_img = QPushButton("Выбрать картинку (обязательно)"); self.pick_img.setObjectName("PrimaryBtn")
         self.pick_img.clicked.connect(self.ui.pick_image)
-        row.addWidget(self.pick_img); row.addStretch(1)
+        self.open_tokens = QPushButton("Открыть tokens.txt"); self.open_tokens.setObjectName("SecondaryBtn")
+        self.open_tokens.clicked.connect(self.ui.open_tokens_txt)
+        row.addWidget(self.pick_img)
+        row.addWidget(self.open_tokens)
+        row.addStretch(1)
 
-        hint = QLabel("Лимит: строго 2 бота на аккаунт за 1 запуск (1 запуск = 1 круг)."); hint.setObjectName("Hint")
+        limit_row = QHBoxLayout()
+        self.limit_hint = QLabel(""); self.limit_hint.setObjectName("Hint")
+        self.limit_edit = QPushButton("Изменить лимит"); self.limit_edit.setObjectName("SecondaryBtn")
+        self.limit_edit.clicked.connect(self.change_limit)
+        limit_row.addWidget(self.limit_hint)
+        limit_row.addStretch(1)
+        limit_row.addWidget(self.limit_edit)
 
         btn_row = QHBoxLayout()
         self.custom = QPushButton("Кастомизация"); self.custom.setObjectName("SecondaryBtn")
@@ -917,11 +1331,47 @@ class AutoPage(QWidget):
 
         c.addLayout(form)
         c.addLayout(row)
-        c.addWidget(hint)
+        self.update_limit_hint()
+        c.addLayout(limit_row)
         c.addLayout(btn_row)
 
         lay.addWidget(card)
         lay.addWidget(self.ui.logbox, 1)
+
+    def update_limit_hint(self):
+        self.limit_hint.setText(f"Лимит: {self.ui.cfg.per_account_limit} бота(ов) на аккаунт за 1 запуск (1 запуск = 1 круг).")
+
+    def change_limit(self):
+        dlg = StyledDialog(self, "Лимит ботов")
+        dlg.resize(520, 260)
+
+        label = QLabel("Сколько ботов можно создать на аккаунт за запуск?")
+        label.setWordWrap(True)
+        label.setObjectName("Hint")
+
+        spin = QSpinBox()
+        spin.setRange(1, 50)
+        spin.setValue(int(self.ui.cfg.per_account_limit))
+        spin.setObjectName("Input")
+
+        row = QHBoxLayout()
+        ok = QPushButton("ОК"); ok.setObjectName("PrimaryBtn")
+        cancel = QPushButton("Отмена"); cancel.setObjectName("SecondaryBtn")
+        row.addWidget(ok); row.addWidget(cancel); row.addStretch(1)
+
+        body = QVBoxLayout()
+        body.addWidget(label)
+        body.addWidget(spin)
+        body.addLayout(row)
+        dlg.set_body_layout(body)
+
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.ui.cfg.per_account_limit = int(spin.value())
+            self.ui.save_config()
+            self.update_limit_hint()
 
 class BotsPage(QWidget):
     def __init__(self, ui):
@@ -940,6 +1390,7 @@ class BotsPage(QWidget):
 
         self.table = QTableWidget(0, 3)
         self.table.setObjectName("StatsTable")
+        configure_table(self.table)
 
         try:
             self.table.setCornerButtonEnabled(False)
@@ -1026,14 +1477,21 @@ class TokensPage(QWidget):
         body = QHBoxLayout()
         self.tree = QTreeWidget()
         self.tree.setObjectName("StatsTable")
+        configure_table(self.tree)
         self.tree.setHeaderLabels(["Дата / Токен", "Бот"])
-        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setIndentation(18)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setExpandsOnDoubleClick(True)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.tree.setColumnWidth(0, 260)
         self.tree.setColumnWidth(1, 180)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.tree.headerItem().setTextAlignment(0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.tree.headerItem().setTextAlignment(1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         try:
             self.tree.header().setStyleSheet("QHeaderView::section{background: rgba(18,26,46,0.85); color: rgba(230,237,243,0.90); border: none;}")
             from PyQt6.QtGui import QColor
@@ -1120,17 +1578,38 @@ class TokensPage(QWidget):
             key = self._date_key(row)
             groups.setdefault(key, []).append(row)
 
+        bold_font = QFont()
+        bold_font.setBold(True)
+        bold_font.setPointSize(11)
+        token_font = QFont()
+        token_font.setBold(True)
         for date_key in sorted(groups.keys()):
             top = QTreeWidgetItem([f"{date_key} ({len(groups[date_key])})", ""])
             top.setData(0, Qt.ItemDataRole.UserRole, date_key)
-            top.setCheckState(0, Qt.CheckState.Unchecked)
+            top.setFont(0, bold_font)
+            top.setFont(1, bold_font)
+            top.setTextAlignment(0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            top.setTextAlignment(1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            top.setFlags(top.flags() | Qt.ItemFlag.ItemIsSelectable)
+            top.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+            for col in range(2):
+                top.setBackground(col, QBrush(QColor(10, 16, 30)))
             for row in groups[date_key]:
                 token = (row.get("token") or "").strip()
                 username = (row.get("username") or "").strip()
                 child = QTreeWidgetItem([token, username])
+                child.setFont(0, token_font)
+                child.setFont(1, token_font)
+                child.setTextAlignment(0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                child.setTextAlignment(1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                child.setFlags(child.flags() | Qt.ItemFlag.ItemIsSelectable)
+                idx = top.childCount()
+                bg = QColor(12, 18, 34) if idx % 2 == 0 else QColor(14, 20, 36)
+                for col in range(2):
+                    child.setBackground(col, QBrush(bg))
                 top.addChild(child)
             self.tree.addTopLevelItem(top)
-            top.setExpanded(True)
+            top.setExpanded(False)
 
         self.editor.clear()
         self.current_date = None
@@ -1157,12 +1636,12 @@ class TokensPage(QWidget):
 
     def _selected_group_keys(self) -> List[str]:
         keys = []
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item.checkState(0) == Qt.CheckState.Checked:
-                key = item.data(0, Qt.ItemDataRole.UserRole)
-                if key:
-                    keys.append(key)
+        for item in self.tree.selectedItems():
+            if item.parent() is not None:
+                item = item.parent()
+            key = item.data(0, Qt.ItemDataRole.UserRole)
+            if key and key not in keys:
+                keys.append(key)
         return keys
 
     def save_current_group(self):
@@ -1214,14 +1693,24 @@ class TokensPage(QWidget):
         if not keys:
             show_message(self, "Нет выбора", "Отметьте даты галочками слева.")
             return
+        items = self.tree.selectedItems()
+        target = items[0] if items else None
+        if target and target.parent() is not None:
+            target = target.parent()
+        rect = self.tree.visualItemRect(target) if target else QRect()
         rows = self._load_rows()
         keep_rows = [r for r in rows if self._date_key(r) not in keys]
-        self._write_rows(keep_rows)
-        self.refresh_view()
+        def _finish():
+            self._write_rows(keep_rows)
+            self.refresh_view()
+        animate_evaporate_rect(self.tree.viewport(), rect, _finish)
 
     def clear_tokens(self):
-        self._write_rows([])
-        self.refresh_view()
+        rect = self.tree.viewport().rect()
+        def _finish():
+            self._write_rows([])
+            self.refresh_view()
+        animate_evaporate_rect(self.tree.viewport(), rect, _finish)
 
     def _write_rows(self, rows: List[Dict]):
         ensure_file(self.ui.cfg.tokens_txt_path())
@@ -1275,8 +1764,13 @@ class AccountsAuthWorker(QThread):
                 if not await client.is_user_authorized():
                     await client.send_code_request(phone)
                     code = await self.bridge.get_code(phone)
-                    await client.sign_in(phone, code)
-                    if acc.get("password"):
+                    try:
+                        await client.sign_in(phone, code)
+                    except SessionPasswordNeededError:
+                        pwd = acc.get("password") or await self.bridge.get_password(phone)
+                        if pwd:
+                            await client.sign_in(password=pwd)
+                    if not await client.is_user_authorized() and acc.get("password"):
                         try:
                             await client.sign_in(password=acc["password"])
                         except SessionPasswordNeededError:
@@ -1315,12 +1809,32 @@ class AccountsPage(QWidget):
 
         self.table = QTableWidget(0, 3)
         self.table.setObjectName("StatsTable")
+        configure_table(self.table)
         self.table.setHorizontalHeaderLabels(["Телефон", "Статус", "Причина"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        try:
+            self.table.setCornerButtonEnabled(False)
+        except Exception:
+            pass
+        try:
+            self.table.verticalHeader().setStyleSheet("QHeaderView::section{background: rgba(18,26,46,0.85); color: rgba(230,237,243,0.90); border: none;}")
+            self.table.horizontalHeader().setStyleSheet("QHeaderView::section{background: rgba(18,26,46,0.85); color: rgba(230,237,243,0.90); border: none;}")
+            self.table.setStyleSheet(self.table.styleSheet() + " QTableCornerButton::section{background: rgba(18,26,46,0.85); border:none;} QHeaderView{background: transparent;} ")
+            pal = self.table.palette()
+            pal.setColor(pal.ColorRole.Base, QColor(10,16,30))
+            pal.setColor(pal.ColorRole.Window, QColor(10,16,30))
+            pal.setColor(pal.ColorRole.Button, QColor(18,26,46))
+            pal.setColor(pal.ColorRole.Text, QColor(230,237,243))
+            self.table.setPalette(pal)
+            self.table.viewport().setAutoFillBackground(False)
+        except Exception:
+            pass
+        self.table.setCornerButtonEnabled(False)
         c.addWidget(self.table)
 
         btn_row = QHBoxLayout()
@@ -1359,6 +1873,9 @@ class AccountsPage(QWidget):
             phone_item = QTableWidgetItem(phone)
             state_item = QTableWidgetItem(state)
             reason_item = QTableWidgetItem(reason)
+            phone_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            state_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            reason_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             if state == "too_many":
                 state_item.setForeground(QColor(255, 90, 90))
                 phone_item.setForeground(QColor(255, 90, 90))
@@ -1387,22 +1904,25 @@ class AccountsPage(QWidget):
         if r < 0:
             return
         phone = self.table.item(r, 0).text()
-        lines = ACCOUNTS_FILE.read_text(encoding="utf-8").splitlines() if ACCOUNTS_FILE.exists() else []
-        with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
-            for line in lines:
-                if not line.startswith(f"{phone}:"):
-                    f.write(f"{line}\n")
-        session_path = SESSIONS_DIR / phone
-        for ext in [".session", ".session-journal"]:
-            p = session_path.with_suffix(ext)
-            if p.exists():
-                try:
-                    p.unlink()
-                except Exception:
-                    pass
-        self.ui.account_status.pop(phone, None)
-        self.ui.save_account_status()
-        self.refresh_table()
+        rect = self.table.visualItemRect(self.table.item(r, 0))
+        def _finish():
+            lines = ACCOUNTS_FILE.read_text(encoding="utf-8").splitlines() if ACCOUNTS_FILE.exists() else []
+            with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+                for line in lines:
+                    if not line.startswith(f"{phone}:"):
+                        f.write(f"{line}\n")
+            session_path = SESSIONS_DIR / phone
+            for ext in [".session", ".session-journal"]:
+                p = session_path.with_suffix(ext)
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
+            self.ui.account_status.pop(phone, None)
+            self.ui.save_account_status()
+            self.refresh_table()
+        animate_evaporate_rect(self.table.viewport(), rect, _finish)
 
     def authorize_accounts(self, only_errors: bool):
         accounts = parse_accounts(ACCOUNTS_FILE)
@@ -1447,6 +1967,7 @@ class StatsPage(QWidget):
 
         self.table = QTableWidget(0, 3)
         self.table.setObjectName("StatsTable")
+        configure_table(self.table)
 
         # Force-remove any white corner/headers forever (Windows palette override)
         try:
@@ -1587,14 +2108,18 @@ class StatsPage(QWidget):
         if r < 0:
             return
         name = self.table.item(r,0).text()
-        self.ui.hamsters.pop(name, None)
-        self.ui.save_hamsters()
-        self.refresh_table()
-        self.ui.auto_page_update_hamsters()
+        rect = self.table.visualItemRect(self.table.item(r, 0))
+        def _finish():
+            self.ui.hamsters.pop(name, None)
+            self.ui.save_hamsters()
+            self.refresh_table()
+            self.ui.auto_page_update_hamsters()
+        animate_evaporate_rect(self.table.viewport(), rect, _finish)
 
 class BotFactoryApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         screen = QApplication.primaryScreen()
@@ -1647,8 +2172,11 @@ class BotFactoryApp(QMainWindow):
         self.btn_accounts = QPushButton("Аккаунты"); self.btn_accounts.setObjectName("NavBtn")
         self.btn_tokens = QPushButton("Токены"); self.btn_tokens.setObjectName("NavBtn")
         self.btn_stats = QPushButton("Статистика"); self.btn_stats.setObjectName("NavBtn")
+        self.btn_onboarding = QPushButton("Мастер новичка"); self.btn_onboarding.setObjectName("NavBtn")
 
         side.addWidget(self.btn_manual); side.addWidget(self.btn_auto); side.addWidget(self.btn_bots); side.addWidget(self.btn_accounts); side.addWidget(self.btn_tokens); side.addWidget(self.btn_stats)
+        side.addSpacing(6)
+        side.addWidget(self.btn_onboarding)
         side.addStretch(1)
         foot = QLabel("Выход: tokens.txt • tokens.csv • sessions/"); foot.setObjectName("Footer")
         side.addWidget(foot)
@@ -1685,20 +2213,26 @@ class BotFactoryApp(QMainWindow):
         self.btn_accounts.clicked.connect(lambda: self._nav(3))
         self.btn_tokens.clicked.connect(lambda: self._nav(4))
         self.btn_stats.clicked.connect(lambda: self._nav(5))
+        self.btn_onboarding.clicked.connect(self.open_onboarding)
         self._nav(1)
 
         self.bridge.request_code.connect(self._ask_code)
         self.bridge.request_password.connect(self._ask_password)
 
         self.setStyleSheet(self._style())
+        self.animator = ActionAnimator(self)
+        QApplication.instance().installEventFilter(self.animator)
+        self.onboarding_overlay = OnboardingOverlay(self)
+        self.onboarding_overlay.hide()
         QTimer.singleShot(0, lambda: center_on_screen(self))
+        QTimer.singleShot(200, self._maybe_first_run)
         self.auto_page_update_hamsters()
 
     def _style(self) -> str:
         return """
-        * { font-family: Arial; }
-        QLabel { color: rgba(230,237,243,0.92); font-weight: 900; margin-bottom: 2px; }
-        QCheckBox { color: rgba(230,237,243,0.92); font-weight: 900; spacing: 10px; }
+        * { font-family: "Segoe UI Variable Text", "Segoe UI", "Arial"; }
+        QLabel { color: rgba(230,237,243,0.92); font-weight: 700; margin-bottom: 2px; }
+        QCheckBox { color: rgba(230,237,243,0.92); font-weight: 700; spacing: 10px; }
         QCheckBox::indicator {
             width: 18px; height: 18px;
             border-radius: 6px;
@@ -1726,14 +2260,14 @@ class BotFactoryApp(QMainWindow):
 
         #Sidebar {
             background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                stop:0 rgba(10,16,30,0.96),
-                stop:1 rgba(8,12,22,0.92));
+                stop:0 rgba(12,18,34,0.98),
+                stop:1 rgba(9,13,24,0.96));
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 24px;
         }
-        #BrandTitle { color: rgba(230,237,243,0.96); font-weight: 1000; font-size: 26px; }
-        #BrandBy { color: rgba(230,237,243,0.55); font-weight: 900; font-size: 12px; margin-top: -4px; }
-        #Footer { color: rgba(230,237,243,0.70); font-size: 11px; font-weight: 800; }
+        #BrandTitle { color: rgba(236,242,250,0.98); font-weight: 800; font-size: 24px; letter-spacing: 0.2px; }
+        #BrandBy { color: rgba(230,237,243,0.60); font-weight: 600; font-size: 12px; margin-top: -2px; }
+        #Footer { color: rgba(230,237,243,0.60); font-size: 11px; font-weight: 600; }
 
         #ContentWrap {
             background: rgba(12,18,34,0.98);
@@ -1746,68 +2280,84 @@ class BotFactoryApp(QMainWindow):
             border: 1px solid rgba(255,255,255,0.10);
             border-radius: 24px;
         }
-        #PageTitle { color: rgba(230,237,243,0.96); font-size: 22px; font-weight: 1000; }
-        #Hint { color: rgba(230,237,243,0.70); font-size: 12px; font-weight: 800; }
+        #PageTitle { color: rgba(236,242,250,0.98); font-size: 21px; font-weight: 800; }
+        #Hint { color: rgba(230,237,243,0.70); font-size: 12px; font-weight: 600; }
 
         #Input {
             min-height: 36px;
             background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.12);
             border-radius: 16px;
             padding: 10px 14px;
-            color: rgba(230,237,243,0.95);
-            font-weight: 800;
+            color: rgba(236,242,250,0.98);
+            font-weight: 600;
         }
-        #Input:focus { border: 1px solid rgba(120, 60, 255, 0.55); background: rgba(255,255,255,0.08); }
+        #Input:focus { border: 1px solid rgba(120, 60, 255, 0.50); background: rgba(255,255,255,0.08); }
 
         QMainWindow[compact="true"] #Input {
             min-height: 30px;
             padding: 8px 12px;
         }
-        QMainWindow[compact="true"] #NavBtn { padding: 10px 12px; }
-        QMainWindow[compact="true"] #NavBtn { font-size: 12px; }
+        QMainWindow[compact="true"] #NavBtn { padding: 10px 12px; font-size: 12px; }
         QMainWindow[compact="true"] #PrimaryBtn,
-        QMainWindow[compact="true"] #SecondaryBtn { padding: 8px 12px; }
-        QMainWindow[compact="true"] #PageTitle { font-size: 20px; }
+        QMainWindow[compact="true"] #SecondaryBtn { padding: 8px 12px; font-size: 12px; }
+        QMainWindow[compact="true"] #PageTitle { font-size: 19px; }
         QMainWindow[compact="true"] #Hint { font-size: 11px; }
 
         #NavBtn {
-            background: rgba(255,255,255,0.05);
+            background: rgba(255,255,255,0.04);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 18px;
             padding: 12px 14px;
-            color: rgba(230,237,243,0.92);
-            font-weight: 900;
+            color: rgba(236,242,250,0.94);
+            font-weight: 700;
             text-align: left;
         }
-        #NavBtn:hover { background: rgba(120, 60, 255, 0.10); }
+        #NavBtn:hover { background: rgba(120, 60, 255, 0.08); }
         #NavBtn[active="true"] {
             background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                stop:0 rgba(120, 60, 255, 0.28),
-                stop:1 rgba(0, 200, 255, 0.24));
+                stop:0 rgba(120, 60, 255, 0.24),
+                stop:1 rgba(0, 200, 255, 0.20));
             border: 1px solid rgba(120, 60, 255, 0.30);
+        }
+        #NavBtn[onboarding="true"] {
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                stop:0 rgba(255, 80, 160, 0.32),
+                stop:0.5 rgba(120, 120, 255, 0.30),
+                stop:1 rgba(0, 200, 255, 0.32));
+            border: 1px solid rgba(120, 180, 255, 0.55);
         }
 
         #PrimaryBtn {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 rgba(60,140,255,0.98), stop:0.5 rgba(150,80,255,0.98), stop:1 rgba(0,210,255,0.98));
+                stop:0 rgba(66,146,255,0.98), stop:0.5 rgba(146,86,255,0.98), stop:1 rgba(0,210,255,0.98));
             border: 1px solid rgba(255,255,255,0.14);
             border-radius: 18px;
             padding: 10px 16px;
             color: rgba(255,255,255,0.98);
-            font-weight: 1000;
+            font-weight: 700;
         }
-        #PrimaryBtn:hover { border-color: rgba(255,255,255,0.22); }
+        #PrimaryBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 rgba(60,140,255,0.98), stop:0.5 rgba(150,80,255,0.98), stop:1 rgba(0,210,255,0.98)); }
 
         #SecondaryBtn {
-            background: rgba(255,255,255,0.08);
-            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.10);
             border-radius: 18px;
             padding: 10px 16px;
-            color: rgba(230,237,243,0.95);
-            font-weight: 1000;
+            color: rgba(236,242,250,0.96);
+            font-weight: 600;
         }
-        #SecondaryBtn:hover { background: rgba(255,255,255,0.14); }
+        #SecondaryBtn:hover { background: rgba(255,255,255,0.10); }
+        #EmojiBtn {
+            background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 14px;
+            padding: 6px 10px;
+            color: rgba(230,237,243,0.95);
+            font-weight: 900;
+        }
+        #EmojiBtn:hover { background: rgba(255,255,255,0.18); }
 
         QScrollBar:vertical {
             background: transparent;
@@ -1834,29 +2384,83 @@ class BotFactoryApp(QMainWindow):
         QScrollBar::add-line:horizontal,
         QScrollBar::sub-line:horizontal { width: 0px; }
 
-        QTreeWidget::item { color: rgba(230,237,243,0.92); }
+        QTreeWidget::item { color: rgba(230,237,243,0.92); font-weight: 900; }
         QTreeWidget::item:selected { background: rgba(120, 60, 255, 0.20); }
+        QTreeWidget::item:alternate { background: rgba(255,255,255,0.03); }
+        QTreeWidget QAbstractScrollArea::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
+        QTreeView::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
+        QTableView::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
+        QTableCornerButton::section { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
+        QTreeWidget::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.20);
+            background: rgba(255,255,255,0.06);
+        }
+        QTreeWidget::indicator:checked {
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                stop:0 rgba(50,120,255,0.95),
+                stop:1 rgba(0,200,255,0.95));
+            border: 1px solid rgba(255,255,255,0.28);
+        }
+        QSpinBox {
+            min-height: 36px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 16px;
+            padding: 4px 10px;
+            color: rgba(236,242,250,0.98);
+            font-weight: 600;
+        }
+        QSpinBox::up-button, QSpinBox::down-button {
+            subcontrol-origin: border;
+            background: rgba(255,255,255,0.06);
+            border: none;
+            width: 16px;
+        }
+        QSpinBox::up-button { subcontrol-position: top right; border-top-right-radius: 12px; }
+        QSpinBox::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 12px; }
 
         #LogBox {
             background: rgba(8, 12, 22, 0.55);
             border: 1px solid rgba(255,255,255,0.06);
             border-radius: 22px;
         }
-        #LogText { color: rgba(230,237,243,0.86); font-weight: 800; font-size: 12px; }
+        #LogText { color: rgba(236,242,250,0.90); font-weight: 600; font-size: 12px; }
 
         #StatsTable {
-            background: rgba(8, 12, 22, 0.35);
+            background: rgba(8, 12, 22, 0.40);
             border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 18px;
-            color: rgba(230,237,243,0.90);
+            border-radius: 24px;
+            color: rgba(236,242,250,0.92);
             gridline-color: rgba(255,255,255,0.06);
+        }
+        QTableWidget::item {
+            padding: 6px 10px;
+            background: transparent;
+        }
+        QTableWidget::item:alternate {
+            background: rgba(255,255,255,0.03);
+        }
+        QTableWidget::item:selected {
+            background: rgba(120, 60, 255, 0.20);
+        }
+        QTableWidget, QTreeWidget, QTableView, QTreeView, QAbstractScrollArea {
+            border-radius: 24px;
+            background: rgba(8, 12, 22, 0.35);
+        }
+        QTableView::viewport, QTreeView::viewport, QAbstractScrollArea::viewport {
+            border-radius: 24px;
+            background: transparent;
         }
         QHeaderView::section {
             background: rgba(8, 12, 22, 0.80);
             color: rgba(230,237,243,0.80);
             border: none;
             padding: 8px;
-            font-weight: 900;
+            font-weight: 700;
+            border-radius: 0px;
         }
 
         QDialog#PremiumDialog { background: transparent; }
@@ -1866,6 +2470,25 @@ class BotFactoryApp(QMainWindow):
             border-radius: 22px;
         }
         #PremiumDialogTitle { color: rgba(230,237,243,0.95); font-weight: 1000; font-size: 14px; }
+
+        #FirstRunCard {
+            background: rgba(8, 12, 22, 0.98);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 24px;
+        }
+        #OnboardingOverlay {
+            background: transparent;
+        }
+        #OverlayCard {
+            background: rgba(10, 16, 30, 0.98);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 24px;
+            min-width: 520px;
+            max-width: 860px;
+            min-height: 320px;
+        }
+        #OverlayTitle { color: rgba(230,237,243,0.98); font-size: 18px; font-weight: 1000; }
+        #OverlayText { color: rgba(230,237,243,0.88); font-size: 13px; font-weight: 800; }
         
 
         /* --- Customization dialog background consistency --- */
@@ -1886,6 +2509,45 @@ class BotFactoryApp(QMainWindow):
             b.setProperty("active", "true" if i == idx else "false")
             b.style().unpolish(b)
             b.style().polish(b)
+        try:
+            self.stack.currentWidget().setGraphicsEffect(None)
+        except Exception:
+            pass
+        animate_section_fade(self.stack.currentWidget(), 180)
+
+    def _maybe_first_run(self):
+        if getattr(self.cfg, "first_run_done", False):
+            return
+        dlg = FirstRunDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.cfg.first_run_done = True
+            self.cfg.language = dlg.selected_language
+            self.save_config()
+            if dlg.launch_onboarding:
+                QTimer.singleShot(200, self.open_onboarding)
+
+    def open_onboarding(self):
+        steps = [
+            ("Ручное создание", "• Укажите чат BotFather.\n• Введите имя бота — это название, которое увидят пользователи.\n• Введите username — адрес вида @имя_бота.\n• Выберите картинку, чтобы бот выглядел завершённо.\n• Нажмите «Запуск (Ручной режим)», чтобы создать одного бота."),
+            ("Авто‑создание", "• Имена вводите через «/», например: name1/name2/name3.\n• Выберите хомяка — это процентное распределение токенов.\n• Выберите картинку, которая будет назначена всем создаваемым ботам.\n• Нажмите «Запуск (Авто режим)».\n• Лимит ботов на аккаунт можно менять здесь же."),
+            ("Боты", "• Здесь список созданных ботов.\n• Видно аккаунт, на котором создан бот, и дату создания.\n• Нажмите «Обновить», чтобы подтянуть свежие данные после запуска."),
+            ("Аккаунты", "• Добавляйте аккаунты в формате phone:password:api_id:api_hash.\n• Используйте «Авторизовать все», чтобы проверить вход.\n• «Авторизовать ошибки» — только проблемные аккаунты.\n• Статусы показывают причину ошибок."),
+            ("Токены", "• Токены сгруппированы по датам.\n• Раскрывайте дату стрелкой, чтобы увидеть токены.\n• Копируйте выбранные группы, редактируйте и удаляйте записи."),
+            ("Статистика", "• Создавайте хомяков с процентами.\n• Видите количество ботов по каждому хомяку.\n• Можно редактировать и удалять записи."),
+            ("Финал", "Поздравляю, теперь ты знаешь базовые функции этого приложения!🎉\n\ncreated by whynot_repow")
+        ]
+        def _sync_section(idx: int):
+            targets = [self.btn_manual, self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats]
+            if idx < len(targets):
+                self._nav(idx)
+                self.onboarding_overlay.set_target_widget(targets[idx])
+            else:
+                self.onboarding_overlay.set_target_widget(None)
+        self.onboarding_overlay.on_step_changed = _sync_section
+        self.onboarding_overlay.set_steps(steps)
+        self.onboarding_overlay.open_overlay()
+        self.onboarding_overlay.raise_()
+        _sync_section(0)
 
     def resizeEvent(self, event):
         w = self.width()
@@ -1913,6 +2575,8 @@ class BotFactoryApp(QMainWindow):
             self.body_layout.setStretch(0, 1)
             self.body_layout.setStretch(1, 3)
             self.logbox.text.setMaximumHeight(220)
+        if hasattr(self, "onboarding_overlay") and self.onboarding_overlay.isVisible():
+            self.onboarding_overlay.setGeometry(self.rect())
         super().resizeEvent(event)
 
     def save_config(self):
@@ -1938,6 +2602,11 @@ class BotFactoryApp(QMainWindow):
         if p:
             self.image_path = p
             self.log(f"[OK] Картинка: {p}")
+
+    def open_tokens_txt(self):
+        path = self.cfg.tokens_txt_path()
+        ensure_file(path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _ask_code(self, phone: str):
         code = show_input_dialog(self, "Код авторизации", f"Введите код для {phone}:")
