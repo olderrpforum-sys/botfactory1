@@ -7,12 +7,14 @@ import csv
 import json
 import asyncio
 import time
+import zipfile
+import shutil
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QPropertyAnimation, QEasingCurve, QUrl
-from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QLinearGradient, QPen, QBrush, QDesktopServices
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve, QUrl
+from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QLinearGradient, QPen, QBrush, QDesktopServices, QPainterPath
 from PyQt6.QtWidgets import (
     QTextBrowser,
     QPlainTextEdit,
@@ -37,6 +39,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QHeaderView,
     QAbstractItemView,
+    QListView,
     QDialog,
     QFormLayout,
     QSizePolicy,
@@ -173,21 +176,11 @@ def configure_table(widget):
     except Exception:
         pass
     try:
-        widget.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        widget.horizontalHeader().setStyleSheet("QHeaderView::section{background: rgba(8,12,22,0.80); color: rgba(230,237,243,0.80); border: none; border-radius: 0px; padding: 8px;}")
-        widget.verticalHeader().setStyleSheet("QHeaderView::section{background: rgba(8,12,22,0.80); color: rgba(230,237,243,0.80); border: none; border-radius: 0px; padding: 8px;}")
-    except Exception:
-        pass
-    try:
         widget.setTextElideMode(Qt.TextElideMode.ElideRight)
     except Exception:
         pass
     try:
         widget.setWordWrap(False)
-    except Exception:
-        pass
-    try:
-        widget.setStyleSheet(widget.styleSheet() + " QTableView{border-radius:24px;} QTreeView{border-radius:24px;} QTableView::viewport{border-radius:24px;} QTreeView::viewport{border-radius:24px;} QHeaderView::section{border-radius:0px;}")
     except Exception:
         pass
 
@@ -320,6 +313,41 @@ def show_message(parent: QWidget, title: str, text: str):
     dlg.set_body_layout(body)
     dlg.exec()
 
+def show_copy_dialog(parent: QWidget, title: str, text: str, copy_text: str):
+    dlg = StyledDialog(parent, title)
+    dlg.resize(640, 360)
+
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setObjectName("Hint")
+
+    box = QPlainTextEdit()
+    box.setObjectName("Input")
+    box.setReadOnly(True)
+    box.setPlainText(copy_text)
+
+    copy_btn = QPushButton("Скопировать")
+    copy_btn.setObjectName("SecondaryBtn")
+    ok = QPushButton("ОК")
+    ok.setObjectName("PrimaryBtn")
+
+    row = QHBoxLayout()
+    row.addStretch(1)
+    row.addWidget(copy_btn)
+    row.addWidget(ok)
+
+    body = QVBoxLayout()
+    body.addWidget(label)
+    body.addWidget(box, 1)
+    body.addLayout(row)
+    dlg.set_body_layout(body)
+
+    def _copy():
+        QApplication.clipboard().setText(copy_text)
+    copy_btn.clicked.connect(_copy)
+    ok.clicked.connect(dlg.accept)
+    dlg.exec()
+
 def show_input_dialog(parent: QWidget, title: str, prompt: str, placeholder: str = "", echo_mode: QLineEdit.EchoMode = QLineEdit.EchoMode.Normal) -> Optional[str]:
     dlg = StyledDialog(parent, title)
     dlg.resize(560, 260)
@@ -406,6 +434,7 @@ class AutoConfig:
     sanitize_username: bool = True
     tokens_txt: str = "tokens.txt"
     tokens_csv: str = "tokens.csv"
+    revoked_tokens_txt: str = "revoked_tokens.txt"
     per_account_limit: int = 2
     freeze_threshold_seconds: int = 350
     force_setuserpic_delay1: float = 1.0
@@ -419,6 +448,10 @@ class AutoConfig:
 
     def tokens_csv_path(self) -> Path:
         p = Path(self.tokens_csv)
+        return p if p.is_absolute() else BASE_DIR / p
+
+    def revoked_tokens_txt_path(self) -> Path:
+        p = Path(self.revoked_tokens_txt)
         return p if p.is_absolute() else BASE_DIR / p
 
 class PromptBridge(QObject):
@@ -841,6 +874,8 @@ class LogBox(QFrame):
     def __init__(self):
         super().__init__()
         self.setObjectName("LogBox")
+        self.setMinimumHeight(180)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(0)
@@ -891,6 +926,7 @@ class LogBox(QFrame):
         self.text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text.setMaximumHeight(220)
+        self.text.setMinimumHeight(140)
         self.text.setPlaceholderText("Логи появятся здесь…")
 
         lay.addWidget(self.text)
@@ -910,7 +946,9 @@ class Worker(QThread):
 
     def __init__(self, mode: str, chat: str, names: List[str], hamster: str,
                  image_path: str, cfg: AutoConfig, bridge: PromptBridge, overrides: Optional[Dict[str, Dict]] = None,
-                 account_status: Optional[Dict[str, Dict]] = None):
+                 account_status: Optional[Dict[str, Dict]] = None,
+                 delete_targets: Optional[List[Dict[str, str]]] = None,
+                 revoke_targets: Optional[List[Dict[str, str]]] = None):
         super().__init__()
         self.mode = mode
         self.chat = chat
@@ -921,6 +959,12 @@ class Worker(QThread):
         self.bridge = bridge
         self.overrides = overrides or {}
         self.account_status = account_status or {}
+        self.delete_targets = delete_targets or []
+        self.revoke_targets = revoke_targets or []
+        self.too_many_phones: set[str] = set()
+        self.no_available_accounts = False
+        self.remaining_names: List[str] = []
+        self.revoked_results: List[Tuple[str, str]] = []
         self.stop_requested = False
 
     def stop(self):
@@ -997,37 +1041,91 @@ class Worker(QThread):
             await asyncio.sleep(0.6)
         return None
 
+    async def _wait_for_message_contains(
+        self,
+        client: TelegramClient,
+        peer: str,
+        last_id: int,
+        phrases: List[str],
+        timeout: float = 35.0
+    ) -> Optional[str]:
+        started = time.time()
+        expect = [p.lower() for p in phrases]
+        current_last = last_id
+        while time.time() - started < timeout:
+            if self.stop_requested:
+                return None
+            msgs = await client.get_messages(peer, limit=10)
+            found = False
+            for m in reversed(msgs):
+                mid = getattr(m, "id", 0)
+                if mid <= current_last:
+                    continue
+                current_last = max(current_last, mid)
+                txt = (getattr(m, "raw_text", "") or getattr(m, "message", "") or "")
+                if not txt:
+                    continue
+                lowered = txt.lower()
+                if any(p in lowered for p in expect):
+                    return txt
+                found = True
+            if found:
+                await asyncio.sleep(0.6)
+            else:
+                await asyncio.sleep(0.6)
+        return None
+
     async def _create_one_bot(self, client: TelegramClient, base_name: str) -> Optional[Tuple[str, str]]:
         peer = self.chat
 
-        # reset conversation to avoid continuing previous flow on account switches
         last = await client.get_messages(peer, limit=1)
         last_id = last[0].id if last else 0
-        await client(SendMessageRequest(peer, "/cancel"))
-        await self._wait_for_new_message(client, peer, last_id, timeout=8.0)
+        await client(SendMessageRequest(peer, "/start"))
+        await self._wait_for_new_message(client, peer, last_id, timeout=12.0)
 
-        # /newbot with retry
-        ok, resp = await self._send_rate_aware(client, peer, "/newbot")
-        if not ok:
-            sec = extract_try_again_seconds(resp) or 0
-            if sec > self.cfg.freeze_threshold_seconds:
-                return None
-            await self._wait_rate(sec + 1)
-            await client(SendMessageRequest(peer, "/newbot"))
-            await asyncio.sleep(0.8)
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, "/newbot"))
+        start_prompt = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["Alright, a new bot", "please choose a name for your bot"],
+            timeout=25.0
+        )
+        if not start_prompt:
+            self.log.emit("[WARN] Нет запроса имени от BotFather.")
+            return None
+        if has_too_many_bots(start_prompt):
+            self.account_status[self.current_phone] = {"state": "too_many", "reason": "20+"}
+            self.too_many_phones.add(self.current_phone)
+            try:
+                save_json(ACCOUNTS_STATUS_FILE, self.account_status)
+            except Exception:
+                pass
+            return None
 
-        # name
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
         await client(SendMessageRequest(peer, self._build_bot_name(base_name)))
-        await asyncio.sleep(0.8)
+        name_prompt = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["choose a username for your bot", "it must end in", "username for your bot"],
+            timeout=25.0
+        )
+        if not name_prompt:
+            self.log.emit("[WARN] Нет запроса username от BotFather.")
+            return None
 
-        # username tries
         for uname in self._build_username_candidates(base_name):
             if self.stop_requested:
                 return None
             last = await client.get_messages(peer, limit=1)
             last_id = last[0].id if last else 0
             await client(SendMessageRequest(peer, uname))
-            joined = await self._wait_for_new_message(client, peer, last_id)
+            joined = await self._wait_for_new_message(client, peer, last_id, timeout=25.0)
             if joined is None:
                 self.log.emit("[WARN] Нет ответа BotFather — переходим к следующему username.")
                 continue
@@ -1041,6 +1139,7 @@ class Worker(QThread):
 
             if has_too_many_bots(joined):
                 self.account_status[self.current_phone] = {"state": "too_many", "reason": "20+"}
+                self.too_many_phones.add(self.current_phone)
                 try:
                     save_json(ACCOUNTS_STATUS_FILE, self.account_status)
                 except Exception:
@@ -1056,7 +1155,6 @@ class Worker(QThread):
 
             if ("Done!" in joined) or ("Congratulations" in joined) or ("You will find it at" in joined):
                 token = extract_token(joined) or ""
-                # Иногда токен приходит отдельным сообщением/с задержкой — подождём и поищем принудительно
                 if not token:
                     for _ in range(12):
                         try:
@@ -1084,25 +1182,63 @@ class Worker(QThread):
 
         last = await client.get_messages(peer, limit=1)
         last_id = last[0].id if last else 0
-        await client(SendMessageRequest(peer, "/cancel"))
-        await self._wait_for_new_message(client, peer, last_id, timeout=8.0)
+        await client(SendMessageRequest(peer, "/setuserpic"))
+        choose_prompt = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["Choose a bot to change profile photo", "Choose a bot to change profile photo."],
+            timeout=20.0
+        )
+        if not choose_prompt:
+            self.log.emit("[WARN] Нет запроса выбора бота для аватарки.")
+            return
 
-        ok, resp = await self._send_rate_aware(client, peer, "/setuserpic")
-        if not ok:
-            sec = extract_try_again_seconds(resp) or 0
-            if sec > self.cfg.freeze_threshold_seconds:
-                return
-            await self._wait_rate(sec + 1)
-            await client(SendMessageRequest(peer, "/setuserpic"))
-            await asyncio.sleep(0.8)
-
-        await asyncio.sleep(self.cfg.force_setuserpic_delay1)
         last = await client.get_messages(peer, limit=1)
         last_id = last[0].id if last else 0
         await client(SendMessageRequest(peer, f"@{username}"))
-        await self._wait_for_new_message(client, peer, last_id, timeout=8.0)
-        await asyncio.sleep(self.cfg.force_setuserpic_delay2)
+        ok_prompt = await self._wait_for_new_message(client, peer, last_id, timeout=20.0)
+        if not ok_prompt:
+            self.log.emit("[WARN] Нет подтверждения выбора бота для аватарки.")
+            return
+        if "Invalid bot selected" in ok_prompt:
+            self.log.emit("[WARN] Invalid bot selected — повторяем выбор.")
+            last = await client.get_messages(peer, limit=1)
+            last_id = last[0].id if last else 0
+            await client(SendMessageRequest(peer, f"@{username}"))
+            ok_prompt = await self._wait_for_message_contains(
+                client,
+                peer,
+                last_id,
+                ["OK. Send me the new profile photo", "Send me the new profile photo"],
+                timeout=20.0
+            )
+            if not ok_prompt:
+                return
+        if "OK. Send me the new profile photo" not in ok_prompt:
+            ok_prompt = await self._wait_for_message_contains(
+                client,
+                peer,
+                last_id,
+                ["OK. Send me the new profile photo", "Send me the new profile photo"],
+                timeout=20.0
+            )
+            if not ok_prompt:
+                self.log.emit("[WARN] Нет запроса на отправку фото.")
+                return
+
         await client.send_file(peer, self.image_path)
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        done = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["Success! Profile photo updated", "/help"],
+            timeout=25.0
+        )
+        if not done:
+            self.log.emit("[WARN] Нет подтверждения установки аватарки.")
 
     def _write_token(self, username: str, token: str, hamster: str, account: str):
         ensure_file(self.cfg.tokens_txt_path())
@@ -1116,7 +1252,97 @@ class Worker(QThread):
                 w.writerow(["username", "token", "hamster", "account", "ts"])
             w.writerow([username, token, hamster, account, int(time.time())])
 
+    def _write_revoked_token(self, username: str, token: str, account: str):
+        ensure_file(self.cfg.revoked_tokens_txt_path())
+        with open(self.cfg.revoked_tokens_txt_path(), "a", encoding="utf-8") as f:
+            f.write(f"{username},{account},{token}\n")
+
+    async def _delete_bot(self, client: TelegramClient, username: str) -> bool:
+        peer = self.chat
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, "/start"))
+        await asyncio.sleep(0.5)
+        await self._wait_for_new_message(client, peer, last_id, timeout=12.0)
+
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, "/deletebot"))
+        choose = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["Choose a bot to delete"],
+            timeout=20.0
+        )
+        if not choose:
+            self.log.emit("[WARN] Нет запроса выбора бота для удаления.")
+            return False
+
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, f"@{username}"))
+        await self._wait_for_new_message(client, peer, last_id, timeout=12.0)
+
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, "Yes, I am totally sure."))
+        done = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["Done! The bot is gone", "/help"],
+            timeout=20.0
+        )
+        return bool(done)
+
+    async def _revoke_token(self, client: TelegramClient, username: str, account: str) -> Optional[str]:
+        peer = self.chat
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, "/start"))
+        await asyncio.sleep(0.5)
+        await self._wait_for_new_message(client, peer, last_id, timeout=12.0)
+
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, "/revoke"))
+        choose = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["Choose a bot to generate a new token", "Warning: your old token will stop working"],
+            timeout=20.0
+        )
+        if not choose:
+            self.log.emit("[WARN] Нет запроса выбора бота для revoke.")
+            return None
+
+        last = await client.get_messages(peer, limit=1)
+        last_id = last[0].id if last else 0
+        await client(SendMessageRequest(peer, f"@{username}"))
+        done = await self._wait_for_message_contains(
+            client,
+            peer,
+            last_id,
+            ["Your token was replaced with a new one", "new token"],
+            timeout=20.0
+        )
+        if not done:
+            self.log.emit("[WARN] Нет подтверждения revoke токена.")
+            return None
+        token = extract_token(done) or ""
+        if token:
+            self._write_revoked_token(username, token, account)
+        return token or None
+
     async def _run_async(self):
+        if self.mode == "delete":
+            await self._run_delete()
+            return
+        if self.mode == "revoke":
+            await self._run_revoke()
+            return
         accs = parse_accounts(ACCOUNTS_FILE)
         if not accs:
             self.log.emit("[ERROR] accounts_tg.txt не найден или пуст.")
@@ -1125,6 +1351,9 @@ class Worker(QThread):
         names_queue = list(self.names)
         frozen = load_json(FROZEN_FILE, {})
         per_acc = {a["phone"]: 0 for a in accs}
+        round_attempts = 0
+        round_created = 0
+        rounds_without_success = 0
 
         def is_frozen(phone: str) -> bool:
             until = safe_int(str(frozen.get(phone, 0)), 0)
@@ -1136,13 +1365,50 @@ class Worker(QThread):
         while names_queue and not self.stop_requested:
             acc = accs[acc_index % len(accs)]
             acc_index += 1
+            round_attempts += 1
 
             self.current_phone = acc["phone"]
             if per_acc[acc["phone"]] >= self.cfg.per_account_limit:
+                if round_attempts >= len(accs):
+                    if round_created == 0:
+                        rounds_without_success += 1
+                    else:
+                        rounds_without_success = 0
+                    round_attempts = 0
+                    round_created = 0
+                if rounds_without_success >= 3:
+                    self.no_available_accounts = True
+                    self.remaining_names = list(names_queue)
+                    self.log.emit("[ERROR] Нет доступных аккаунтов для создания.")
+                    break
                 continue
             if is_frozen(acc["phone"]):
+                if round_attempts >= len(accs):
+                    if round_created == 0:
+                        rounds_without_success += 1
+                    else:
+                        rounds_without_success = 0
+                    round_attempts = 0
+                    round_created = 0
+                if rounds_without_success >= 3:
+                    self.no_available_accounts = True
+                    self.remaining_names = list(names_queue)
+                    self.log.emit("[ERROR] Нет доступных аккаунтов для создания.")
+                    break
                 continue
             if self.account_status.get(acc["phone"], {}).get("state") == "too_many":
+                if round_attempts >= len(accs):
+                    if round_created == 0:
+                        rounds_without_success += 1
+                    else:
+                        rounds_without_success = 0
+                    round_attempts = 0
+                    round_created = 0
+                if rounds_without_success >= 3:
+                    self.no_available_accounts = True
+                    self.remaining_names = list(names_queue)
+                    self.log.emit("[ERROR] Нет доступных аккаунтов для создания.")
+                    break
                 continue
 
             base = names_queue.pop(0)
@@ -1168,10 +1434,23 @@ class Worker(QThread):
                         self.log.emit(f"[FREEZE] {acc['phone']} заморожен на {sec}s. Переходим к следующему аккаунту, бот НЕ потерян.")
                     else:
                         self.log.emit("[WARN] Не удалось создать бота — пробуем другим аккаунтом.")
+                    if round_attempts >= len(accs):
+                        if round_created == 0:
+                            rounds_without_success += 1
+                        else:
+                            rounds_without_success = 0
+                        round_attempts = 0
+                        round_created = 0
+                    if rounds_without_success >= 3:
+                        self.no_available_accounts = True
+                        self.remaining_names = list(names_queue)
+                        self.log.emit("[ERROR] Нет доступных аккаунтов для создания.")
+                        break
                     continue
 
                 username, token = created
                 self.log.emit(f"[OK] Создан @{username}")
+                round_created += 1
                 if token:
                     self._write_token(username, token, self.hamster, acc["phone"])
                     self.log.emit("[OK] Токен сохранён.")
@@ -1180,6 +1459,18 @@ class Worker(QThread):
 
                 await self._set_userpic(client, username)
                 per_acc[acc["phone"]] += 1
+                if round_attempts >= len(accs):
+                    if round_created == 0:
+                        rounds_without_success += 1
+                    else:
+                        rounds_without_success = 0
+                    round_attempts = 0
+                    round_created = 0
+                if rounds_without_success >= 3:
+                    self.no_available_accounts = True
+                    self.remaining_names = list(names_queue)
+                    self.log.emit("[ERROR] Нет доступных аккаунтов для создания.")
+                    break
 
             except FloodWaitError as e:
                 sec = int(getattr(e, "seconds", 0) or 0)
@@ -1191,9 +1482,33 @@ class Worker(QThread):
                 else:
                     self.log.emit(f"[RATE] FloodWait {sec}s. Ждём.")
                     await self._wait_rate(sec + 1)
+                if round_attempts >= len(accs):
+                    if round_created == 0:
+                        rounds_without_success += 1
+                    else:
+                        rounds_without_success = 0
+                    round_attempts = 0
+                    round_created = 0
+                if rounds_without_success >= 3:
+                    self.no_available_accounts = True
+                    self.remaining_names = list(names_queue)
+                    self.log.emit("[ERROR] Нет доступных аккаунтов для создания.")
+                    break
             except Exception as e:
                 names_queue.insert(0, base)
                 self.log.emit(f"[ERROR] {e}")
+                if round_attempts >= len(accs):
+                    if round_created == 0:
+                        rounds_without_success += 1
+                    else:
+                        rounds_without_success = 0
+                    round_attempts = 0
+                    round_created = 0
+                if rounds_without_success >= 3:
+                    self.no_available_accounts = True
+                    self.remaining_names = list(names_queue)
+                    self.log.emit("[ERROR] Нет доступных аккаунтов для создания.")
+                    break
             finally:
                 try:
                     await client.disconnect()
@@ -1202,73 +1517,88 @@ class Worker(QThread):
 
         self.log.emit("[OK] Готово.")
 
-class ManualPage(QWidget):
-    def __init__(self, ui):
-        super().__init__()
-        self.ui = ui
-        lay = QVBoxLayout(self); lay.setContentsMargins(0,0,0,0)
+    async def _run_delete(self):
+        accs = parse_accounts(ACCOUNTS_FILE)
+        if not accs:
+            self.log.emit("[ERROR] accounts_tg.txt не найден или пуст.")
+            return
+        if not self.delete_targets:
+            self.log.emit("[ERROR] Нет выбранных ботов для удаления.")
+            return
+        acc_by_phone = {a["phone"]: a for a in accs}
+        for target in self.delete_targets:
+            if self.stop_requested:
+                break
+            username = (target.get("username") or "").strip()
+            phone = (target.get("account") or "").strip()
+            if not username or not phone:
+                self.log.emit("[WARN] Пропуск: нет username или аккаунта.")
+                continue
+            acc = acc_by_phone.get(phone)
+            if not acc:
+                self.log.emit(f"[WARN] Аккаунт {phone} не найден в accounts_tg.txt.")
+                continue
+            self.current_phone = acc["phone"]
+            session_path = SESSIONS_DIR / acc["phone"]
+            client = TelegramClient(str(session_path), acc["api_id"], acc["api_hash"])
+            try:
+                await client.connect()
+                await self._ensure_auth(client, acc)
+                ok = await self._delete_bot(client, username)
+                if ok:
+                    self.log.emit(f"[OK] Удалён @{username}")
+                else:
+                    self.log.emit(f"[ERROR] Не удалось удалить @{username}")
+            except Exception as e:
+                self.log.emit(f"[ERROR] {e}")
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+        self.log.emit("[OK] Удаление завершено.")
 
-        card = QFrame(); card.setObjectName("Card")
-        apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
-
-        title = QLabel("Ручное создание"); title.setObjectName("PageTitle")
-        c.addWidget(title)
-
-        self.chat = QLineEdit(BOTFATHER_USERNAME_DEFAULT); self.chat.setObjectName("Input")
-        self.bot_name = QLineEdit(""); self.bot_name.setObjectName("Input")
-        self.bot_username = QLineEdit(""); self.bot_username.setObjectName("Input")
-
-        self.bot_name.setPlaceholderText("Имя бота (можно emoji)")
-        self.bot_username.setPlaceholderText("Username (пример: mybot_bot)")
-
-        emoji_btn = QToolButton()
-        emoji_btn.setObjectName("EmojiBtn")
-        emoji_btn.setText("😀")
-        emoji_menu = QMenu(emoji_btn)
-        for emo in ["😀", "😎", "✨", "🔥", "🚀", "❤️", "🎉", "🤖", "🌟", "💎", "🧠", "🫶"]:
-            act = emoji_menu.addAction(emo)
-            act.triggered.connect(lambda checked=False, e=emo: self.bot_name.insert(e))
-        emoji_btn.setMenu(emoji_menu)
-        emoji_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        emoji_btn.setToolTip("Добавить emoji в имя")
-
-        form = QFormLayout()
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(6)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        form.addRow(QLabel("Чат:"), self.chat)
-        name_wrap = QWidget()
-        name_row = QHBoxLayout(name_wrap)
-        name_row.setContentsMargins(0, 0, 0, 0)
-        name_row.addWidget(self.bot_name, 1)
-        name_row.addWidget(emoji_btn)
-        form.addRow(QLabel("Имя:"), name_wrap)
-        form.addRow(QLabel("Username:"), self.bot_username)
-
-        row = QHBoxLayout()
-        self.pick_img = QPushButton("Выбрать картинку"); self.pick_img.setObjectName("PrimaryBtn")
-        self.pick_img.clicked.connect(self.ui.pick_image)
-        self.open_tokens = QPushButton("Открыть tokens.txt"); self.open_tokens.setObjectName("SecondaryBtn")
-        self.open_tokens.clicked.connect(self.ui.open_tokens_txt)
-        row.addWidget(self.pick_img)
-        row.addWidget(self.open_tokens)
-        row.addStretch(1)
-
-        btn_row = QHBoxLayout()
-        self.start = QPushButton("Запуск (Ручной режим)"); self.start.setObjectName("PrimaryBtn")
-        self.stop = QPushButton("Стоп"); self.stop.setObjectName("SecondaryBtn")
-        self.start.clicked.connect(self.ui.start_manual)
-        self.stop.clicked.connect(self.ui.stop_worker)
-        btn_row.addWidget(self.start); btn_row.addWidget(self.stop); btn_row.addStretch(1)
-
-        c.addLayout(form)
-        c.addLayout(row)
-        c.addLayout(btn_row)
-
-        lay.addWidget(card)
-        lay.addWidget(self.ui.logbox, 1)
+    async def _run_revoke(self):
+        accs = parse_accounts(ACCOUNTS_FILE)
+        if not accs:
+            self.log.emit("[ERROR] accounts_tg.txt не найден или пуст.")
+            return
+        if not self.revoke_targets:
+            self.log.emit("[ERROR] Нет выбранного бота для revoke.")
+            return
+        acc_by_phone = {a["phone"]: a for a in accs}
+        for target in self.revoke_targets:
+            if self.stop_requested:
+                break
+            username = (target.get("username") or "").strip()
+            phone = (target.get("account") or "").strip()
+            if not username or not phone:
+                self.log.emit("[WARN] Пропуск: нет username или аккаунта.")
+                continue
+            acc = acc_by_phone.get(phone)
+            if not acc:
+                self.log.emit(f"[WARN] Аккаунт {phone} не найден в accounts_tg.txt.")
+                continue
+            self.current_phone = acc["phone"]
+            session_path = SESSIONS_DIR / acc["phone"]
+            client = TelegramClient(str(session_path), acc["api_id"], acc["api_hash"])
+            try:
+                await client.connect()
+                await self._ensure_auth(client, acc)
+                token = await self._revoke_token(client, username, acc["phone"])
+                if token:
+                    self.revoked_results.append((username, token))
+                    self.log.emit(f"[OK] Revoke токен для @{username} сохранён.")
+                else:
+                    self.log.emit(f"[ERROR] Не удалось выполнить revoke для @{username}")
+            except Exception as e:
+                self.log.emit(f"[ERROR] {e}")
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+        self.log.emit("[OK] Revoke завершён.")
 
 class AutoPage(QWidget):
     def __init__(self, ui):
@@ -1280,14 +1610,19 @@ class AutoPage(QWidget):
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
         c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
 
-        title = QLabel("Автоматическое создание"); title.setObjectName("PageTitle")
-        c.addWidget(title)
+        self.title = QLabel("Автоматическое создание"); self.title.setObjectName("PageTitle")
+        c.addWidget(self.title)
 
         self.chat = QLineEdit(BOTFATHER_USERNAME_DEFAULT); self.chat.setObjectName("Input")
         self.names = QLineEdit(""); self.names.setObjectName("Input")
         self.names.setPlaceholderText("name/name2/name3 (без пробелов желательно)")
 
         self.hamster = QComboBox(); self.hamster.setObjectName("Input")
+        hamster_view = QListView()
+        hamster_view.setUniformItemSizes(True)
+        self.hamster.setView(hamster_view)
+        self.hamster.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.hamster.setMinimumContentsLength(12)
         self.hamster.addItem("None")
 
         form = QFormLayout()
@@ -1295,9 +1630,12 @@ class AutoPage(QWidget):
         form.setVerticalSpacing(6)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        form.addRow(QLabel("Чат:"), self.chat)
-        form.addRow(QLabel("Имена:"), self.names)
-        form.addRow(QLabel("Хомяк:"), self.hamster)
+        self.lbl_chat = QLabel("Чат:")
+        self.lbl_names = QLabel("Имена:")
+        self.lbl_hamster = QLabel("Хомяк:")
+        form.addRow(self.lbl_chat, self.chat)
+        form.addRow(self.lbl_names, self.names)
+        form.addRow(self.lbl_hamster, self.hamster)
 
         row = QHBoxLayout()
         self.pick_img = QPushButton("Выбрать картинку (обязательно)"); self.pick_img.setObjectName("PrimaryBtn")
@@ -1339,7 +1677,21 @@ class AutoPage(QWidget):
         lay.addWidget(self.ui.logbox, 1)
 
     def update_limit_hint(self):
-        self.limit_hint.setText(f"Лимит: {self.ui.cfg.per_account_limit} бота(ов) на аккаунт за 1 запуск (1 запуск = 1 круг).")
+        self.limit_hint.setText(self.ui.format_limit_hint(self.ui.cfg.per_account_limit))
+
+    def update_language(self, t: Dict[str, str]):
+        self.title.setText(t["auto_title"])
+        self.lbl_chat.setText(t["auto_chat"])
+        self.lbl_names.setText(t["auto_names"])
+        self.lbl_hamster.setText(t["auto_hamster"])
+        self.names.setPlaceholderText(t["auto_names_placeholder"])
+        self.pick_img.setText(t["auto_pick_img"])
+        self.open_tokens.setText(t["auto_open_tokens"])
+        self.limit_edit.setText(t["auto_limit_edit"])
+        self.custom.setText(t["auto_custom"])
+        self.edit.setText(t["auto_edit"])
+        self.start.setText(t["auto_start"])
+        self.stop.setText(t["auto_stop"])
 
     def change_limit(self):
         dlg = StyledDialog(self, "Лимит ботов")
@@ -1383,10 +1735,10 @@ class BotsPage(QWidget):
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
         c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
 
-        title = QLabel("Боты"); title.setObjectName("PageTitle")
-        hint = QLabel("Список ботов и аккаунтов, на которых они созданы."); hint.setObjectName("Hint")
-        c.addWidget(title)
-        c.addWidget(hint)
+        self.title = QLabel("Боты"); self.title.setObjectName("PageTitle")
+        self.hint = QLabel("Список ботов и аккаунтов, на которых они созданы."); self.hint.setObjectName("Hint")
+        c.addWidget(self.title)
+        c.addWidget(self.hint)
 
         self.table = QTableWidget(0, 3)
         self.table.setObjectName("StatsTable")
@@ -1429,6 +1781,11 @@ class BotsPage(QWidget):
         lay.addWidget(card)
         self.refresh_table()
 
+    def update_language(self, t: Dict[str, str]):
+        self.title.setText(t["bots_title"])
+        self.hint.setText(t["bots_hint"])
+        self.refresh.setText(t["bots_refresh"])
+
     def refresh_table(self):
         rows = []
         csv_path = self.ui.cfg.tokens_csv_path()
@@ -1458,6 +1815,222 @@ class BotsPage(QWidget):
             self.table.setItem(r, 1, QTableWidgetItem(account or "-"))
             self.table.setItem(r, 2, QTableWidgetItem(ts_text))
 
+class ManageBotsPage(QWidget):
+    def __init__(self, ui):
+        super().__init__()
+        self.ui = ui
+        lay = QVBoxLayout(self); lay.setContentsMargins(0,0,0,0)
+
+        card = QFrame(); card.setObjectName("Card")
+        apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
+        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+
+        self.title = QLabel("Удаление и Revoke Token"); self.title.setObjectName("PageTitle")
+        self.hint = QLabel("Выберите ботов в таблице для массового удаления или revoke токена."); self.hint.setObjectName("Hint")
+        c.addWidget(self.title)
+        c.addWidget(self.hint)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setObjectName("StatsTable")
+        configure_table(self.table)
+        self.table.setHorizontalHeaderLabels(["Бот", "Аккаунт"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        c.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        self.refresh = QPushButton("Обновить список"); self.refresh.setObjectName("SecondaryBtn")
+        self.delete_mass = QPushButton("Массовое удаление"); self.delete_mass.setObjectName("PrimaryBtn")
+        self.delete_single = QPushButton("Единичное удаление"); self.delete_single.setObjectName("SecondaryBtn")
+        btn_row.addWidget(self.refresh)
+        btn_row.addSpacing(12)
+        btn_row.addWidget(self.delete_mass)
+        btn_row.addWidget(self.delete_single)
+        btn_row.addStretch(1)
+        c.addLayout(btn_row)
+
+        revoke_row = QHBoxLayout()
+        self.revoke_mass = QPushButton("Массовый Revoke"); self.revoke_mass.setObjectName("PrimaryBtn")
+        self.revoke = QPushButton("Revoke Token"); self.revoke.setObjectName("SecondaryBtn")
+        self.open_revoked = QPushButton("Открыть revoke_tokens.txt"); self.open_revoked.setObjectName("SecondaryBtn")
+        revoke_row.addWidget(self.revoke_mass)
+        revoke_row.addWidget(self.revoke)
+        revoke_row.addWidget(self.open_revoked)
+        revoke_row.addStretch(1)
+        c.addLayout(revoke_row)
+
+        lay.addWidget(card)
+
+        self.refresh.clicked.connect(self.refresh_table)
+        self.delete_mass.clicked.connect(self.ui.delete_mass)
+        self.delete_single.clicked.connect(self.ui.delete_single)
+        self.revoke_mass.clicked.connect(self.ui.revoke_mass)
+        self.revoke.clicked.connect(self.ui.revoke_token)
+        self.open_revoked.clicked.connect(self.ui.open_revoked_tokens_txt)
+
+        self.refresh_table()
+
+    def refresh_table(self):
+        rows = []
+        csv_path = self.ui.cfg.tokens_csv_path()
+        if csv_path.exists():
+            try:
+                with open(csv_path, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        rows.append(row)
+            except Exception:
+                pass
+
+        self.table.setRowCount(0)
+        for row in rows:
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            username = (row.get("username") or "").strip()
+            account = (row.get("account") or row.get("phone") or "").strip()
+            self.table.setItem(r, 0, QTableWidgetItem(username))
+            self.table.setItem(r, 1, QTableWidgetItem(account or "-"))
+
+    def selected_targets(self) -> List[Dict[str, str]]:
+        targets = []
+        rows = sorted({idx.row() for idx in self.table.selectionModel().selectedRows()})
+        for r in rows:
+            username_item = self.table.item(r, 0)
+            account_item = self.table.item(r, 1)
+            username = username_item.text().strip() if username_item else ""
+            account = account_item.text().strip() if account_item else ""
+            if username and account and account != "-":
+                targets.append({"username": username, "account": account})
+        return targets
+
+    def update_language(self, t: Dict[str, str]):
+        self.title.setText(t["manage_title"])
+        self.hint.setText(t["manage_hint"])
+        self.refresh.setText(t["manage_refresh"])
+        self.delete_mass.setText(t["manage_delete_mass"])
+        self.delete_single.setText(t["manage_delete_single"])
+        self.revoke_mass.setText(t["manage_revoke_mass"])
+        self.revoke.setText(t["manage_revoke_single"])
+        self.open_revoked.setText(t["manage_open_revoked"])
+
+class SettingsPage(QWidget):
+    def __init__(self, ui):
+        super().__init__()
+        self.ui = ui
+        lay = QVBoxLayout(self); lay.setContentsMargins(0,0,0,0)
+
+        card = QFrame(); card.setObjectName("Card")
+        apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
+        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+
+        self.title = QLabel("Настройки"); self.title.setObjectName("PageTitle")
+        c.addWidget(self.title)
+
+        self.hero = QLabel()
+        self.hero.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.hero.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.hero.setFixedHeight(260)
+        c.addWidget(self.hero)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.lang_label = QLabel("Язык:")
+        self.lang_combo = QComboBox(); self.lang_combo.setObjectName("Input")
+        self.lang_combo.addItems(["Русский", "English"])
+        form.addRow(self.lang_label, self.lang_combo)
+
+        self.autostart_label = QLabel("Автозапуск с Windows:")
+        self.autostart_toggle = QCheckBox("Включить автозапуск")
+        form.addRow(self.autostart_label, self.autostart_toggle)
+
+        c.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        self.backup_btn = QPushButton("Создать резервную копию"); self.backup_btn.setObjectName("PrimaryBtn")
+        self.restore_btn = QPushButton("Импорт резервной копии"); self.restore_btn.setObjectName("SecondaryBtn")
+        self.reset_btn = QPushButton("Сброс до заводских настроек"); self.reset_btn.setObjectName("SecondaryBtn")
+        btn_row.addWidget(self.backup_btn)
+        btn_row.addWidget(self.restore_btn)
+        btn_row.addWidget(self.reset_btn)
+        btn_row.addStretch(1)
+        c.addLayout(btn_row)
+
+        help_row = QHBoxLayout()
+        self.onboarding_btn = QPushButton("Мастер новичка"); self.onboarding_btn.setObjectName("SecondaryBtn")
+        self.support_btn = QPushButton("Тех. Поддержка"); self.support_btn.setObjectName("PrimaryBtn")
+        help_row.addWidget(self.onboarding_btn)
+        help_row.addWidget(self.support_btn)
+        help_row.addStretch(1)
+        c.addLayout(help_row)
+
+        lay.addWidget(card)
+
+        self.lang_combo.currentTextChanged.connect(self.ui.set_language)
+        self.autostart_toggle.toggled.connect(self.ui.toggle_autostart)
+        self.backup_btn.clicked.connect(self.ui.create_backup)
+        self.restore_btn.clicked.connect(self.ui.restore_backup)
+        self.reset_btn.clicked.connect(self.ui.reset_factory)
+        self.onboarding_btn.clicked.connect(self.ui.open_onboarding)
+        self.support_btn.clicked.connect(self.ui.open_support)
+
+        self.refresh_state()
+
+    def refresh_state(self):
+        lang = getattr(self.ui.cfg, "language", "Русский")
+        idx = self.lang_combo.findText(lang)
+        if idx >= 0:
+            self.lang_combo.setCurrentIndex(idx)
+        self.autostart_toggle.setChecked(self.ui.is_autostart_enabled())
+
+    def update_language(self, t: Dict[str, str]):
+        self.title.setText(t["settings_title"])
+        self._load_hero_image()
+        self.lang_label.setText(t["settings_language"])
+        self.autostart_label.setText(t["settings_autostart_label"])
+        self.autostart_toggle.setText(t["settings_autostart_toggle"])
+        self.backup_btn.setText(t["settings_backup"])
+        self.restore_btn.setText(t["settings_restore"])
+        self.reset_btn.setText(t["settings_reset"])
+        self.onboarding_btn.setText(t["settings_onboarding"])
+        self.support_btn.setText(t["settings_support"])
+
+    def _load_hero_image(self):
+        img_path = BASE_DIR / "settings_title.png"
+        if not img_path.exists():
+            self.hero.setText("BotFactory")
+            self.hero.setObjectName("Hint")
+            return
+        pm = QPixmap(str(img_path))
+        if pm.isNull():
+            self.hero.setText("BotFactory")
+            self.hero.setObjectName("Hint")
+            return
+        available_w = max(300, self.width() - 36)
+        max_w = min(available_w, 1400)
+        max_h = 260
+        target = pm.scaled(max_w, max_h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        rounded = QPixmap(target.size())
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(0, 0, target.width(), target.height())
+        path = QPainterPath()
+        path.addRoundedRect(rect, 22, 22)
+        painter.setClipPath(path)
+        painter.drawPixmap(rect.toRect(), target)
+        painter.end()
+        self.hero.setPixmap(rounded)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._load_hero_image()
+
 class TokensPage(QWidget):
     def __init__(self, ui):
         super().__init__()
@@ -1469,10 +2042,10 @@ class TokensPage(QWidget):
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
         c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
 
-        title = QLabel("Токены"); title.setObjectName("PageTitle")
-        hint = QLabel("Токены сгруппированы по датам. Можно копировать, редактировать и удалять."); hint.setObjectName("Hint")
-        c.addWidget(title)
-        c.addWidget(hint)
+        self.title = QLabel("Токены"); self.title.setObjectName("PageTitle")
+        self.hint = QLabel("Токены сгруппированы по датам. Можно копировать, редактировать и удалять."); self.hint.setObjectName("Hint")
+        c.addWidget(self.title)
+        c.addWidget(self.hint)
 
         body = QHBoxLayout()
         self.tree = QTreeWidget()
@@ -1547,6 +2120,17 @@ class TokensPage(QWidget):
 
         lay.addWidget(card)
         self.refresh_view()
+
+    def update_language(self, t: Dict[str, str]):
+        self.title.setText(t["tokens_title"])
+        self.hint.setText(t["tokens_hint"])
+        self.editor.setPlaceholderText(t["tokens_placeholder"])
+        self.refresh.setText(t["tokens_refresh"])
+        self.save.setText(t["tokens_save"])
+        self.copy_selected.setText(t["tokens_copy_selected"])
+        self.copy_latest.setText(t["tokens_copy_latest"])
+        self.delete_selected.setText(t["tokens_delete_selected"])
+        self.clear_all.setText(t["tokens_clear"])
 
     def _load_rows(self) -> List[Dict]:
         rows = []
@@ -1802,10 +2386,10 @@ class AccountsPage(QWidget):
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
         c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
 
-        title = QLabel("Аккаунты"); title.setObjectName("PageTitle")
-        hint = QLabel("Управление аккаунтами и авторизацией."); hint.setObjectName("Hint")
-        c.addWidget(title)
-        c.addWidget(hint)
+        self.title = QLabel("Аккаунты"); self.title.setObjectName("PageTitle")
+        self.hint = QLabel("Управление аккаунтами и авторизацией."); self.hint.setObjectName("Hint")
+        c.addWidget(self.title)
+        c.addWidget(self.hint)
 
         self.table = QTableWidget(0, 3)
         self.table.setObjectName("StatsTable")
@@ -1859,6 +2443,15 @@ class AccountsPage(QWidget):
 
         lay.addWidget(card)
         self.refresh_table()
+
+    def update_language(self, t: Dict[str, str]):
+        self.title.setText(t["accounts_title"])
+        self.hint.setText(t["accounts_hint"])
+        self.add_btn.setText(t["accounts_add"])
+        self.delete_btn.setText(t["accounts_delete"])
+        self.auth_all.setText(t["accounts_auth_all"])
+        self.auth_failed.setText(t["accounts_auth_failed"])
+        self.refresh.setText(t["accounts_refresh"])
 
     def refresh_table(self):
         accounts = parse_accounts(ACCOUNTS_FILE)
@@ -1951,18 +2544,19 @@ class StatsPage(QWidget):
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
         c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
 
-        title = QLabel("Статистика"); title.setObjectName("PageTitle")
-        c.addWidget(title)
+        self.title = QLabel("Статистика"); self.title.setObjectName("PageTitle")
+        c.addWidget(self.title)
 
         row = QHBoxLayout()
         self.name = QLineEdit(""); self.name.setObjectName("Input"); self.name.setPlaceholderText("Название хомяка")
         self.percent = QSpinBox(); self.percent.setRange(0,100); self.percent.setValue(50); self.percent.setObjectName("Input")
-        add = QPushButton("Добавить хомяка"); add.setObjectName("PrimaryBtn")
-        add.clicked.connect(self.add_hamster)
+        self.add_btn = QPushButton("Добавить хомяка"); self.add_btn.setObjectName("PrimaryBtn")
+        self.add_btn.clicked.connect(self.add_hamster)
         row.addWidget(self.name, 2)
-        row.addWidget(QLabel("Процент:"))
+        self.percent_label = QLabel("Процент:")
+        row.addWidget(self.percent_label)
         row.addWidget(self.percent)
-        row.addWidget(add)
+        row.addWidget(self.add_btn)
         c.addLayout(row)
 
         self.table = QTableWidget(0, 3)
@@ -2018,6 +2612,15 @@ class StatsPage(QWidget):
 
         lay.addWidget(card)
         self.refresh_table()
+
+    def update_language(self, t: Dict[str, str]):
+        self.title.setText(t["stats_title"])
+        self.name.setPlaceholderText(t["stats_name_placeholder"])
+        self.percent_label.setText(t["stats_percent_label"])
+        self.add_btn.setText(t["stats_add"])
+        self.edit.setText(t["stats_edit"])
+        self.delete.setText(t["stats_delete"])
+        self.refresh.setText(t["stats_refresh"])
 
     def add_hamster(self):
         name = self.name.text().strip()
@@ -2134,6 +2737,7 @@ class BotFactoryApp(QMainWindow):
         # Ensure tokens output files exist on startup
         ensure_file(self.cfg.tokens_txt_path())
         ensure_file(self.cfg.tokens_csv_path())
+        ensure_file(self.cfg.revoked_tokens_txt_path())
         self.hamsters = load_json(HAMSTERS_FILE, {})
         if not isinstance(self.hamsters, dict):
             self.hamsters = {}
@@ -2166,18 +2770,18 @@ class BotFactoryApp(QMainWindow):
         by = QLabel(BYLINE); by.setObjectName("BrandBy")
         side.addWidget(brand); side.addWidget(by); side.addSpacing(10)
 
-        self.btn_manual = QPushButton("Ручное создание"); self.btn_manual.setObjectName("NavBtn")
         self.btn_auto = QPushButton("Автоматическое создание"); self.btn_auto.setObjectName("NavBtn")
         self.btn_bots = QPushButton("Боты"); self.btn_bots.setObjectName("NavBtn")
         self.btn_accounts = QPushButton("Аккаунты"); self.btn_accounts.setObjectName("NavBtn")
         self.btn_tokens = QPushButton("Токены"); self.btn_tokens.setObjectName("NavBtn")
         self.btn_stats = QPushButton("Статистика"); self.btn_stats.setObjectName("NavBtn")
-        self.btn_onboarding = QPushButton("Мастер новичка"); self.btn_onboarding.setObjectName("NavBtn")
+        self.btn_manage = QPushButton("Удаление / Revoke"); self.btn_manage.setObjectName("NavBtn")
+        self.btn_settings = QPushButton("Настройки"); self.btn_settings.setObjectName("NavBtn")
 
-        side.addWidget(self.btn_manual); side.addWidget(self.btn_auto); side.addWidget(self.btn_bots); side.addWidget(self.btn_accounts); side.addWidget(self.btn_tokens); side.addWidget(self.btn_stats)
-        side.addSpacing(6)
-        side.addWidget(self.btn_onboarding)
+        side.addWidget(self.btn_auto); side.addWidget(self.btn_bots); side.addWidget(self.btn_accounts); side.addWidget(self.btn_tokens); side.addWidget(self.btn_stats); side.addWidget(self.btn_manage)
         side.addStretch(1)
+        side.addWidget(self.btn_settings)
+        side.addSpacing(6)
         foot = QLabel("Выход: tokens.txt • tokens.csv • sessions/"); foot.setObjectName("Footer")
         side.addWidget(foot)
         body.addWidget(sidebar, 1)
@@ -2185,19 +2789,21 @@ class BotFactoryApp(QMainWindow):
         self.logbox = LogBox()
         self.stack = QStackedWidget(); self.stack.setObjectName("Stack")
 
-        self.manual_page = ManualPage(self)
         self.auto_page = AutoPage(self)
         self.bots_page = BotsPage(self)
         self.accounts_page = AccountsPage(self)
         self.tokens_page = TokensPage(self)
         self.stats_page = StatsPage(self)
+        self.manage_page = ManageBotsPage(self)
+        self.settings_page = SettingsPage(self)
 
-        self.stack.addWidget(self.manual_page)
         self.stack.addWidget(self.auto_page)
         self.stack.addWidget(self.bots_page)
         self.stack.addWidget(self.accounts_page)
         self.stack.addWidget(self.tokens_page)
         self.stack.addWidget(self.stats_page)
+        self.stack.addWidget(self.manage_page)
+        self.stack.addWidget(self.settings_page)
 
         content_wrap = QFrame(); content_wrap.setObjectName("ContentWrap")
         apply_shadow(content_wrap, blur=30, alpha=150, offset=QPointF(0, 8))
@@ -2207,14 +2813,14 @@ class BotFactoryApp(QMainWindow):
         cw.addWidget(self.stack, 1)
         body.addWidget(content_wrap, 3)
 
-        self.btn_manual.clicked.connect(lambda: self._nav(0))
-        self.btn_auto.clicked.connect(lambda: self._nav(1))
-        self.btn_bots.clicked.connect(lambda: self._nav(2))
-        self.btn_accounts.clicked.connect(lambda: self._nav(3))
-        self.btn_tokens.clicked.connect(lambda: self._nav(4))
-        self.btn_stats.clicked.connect(lambda: self._nav(5))
-        self.btn_onboarding.clicked.connect(self.open_onboarding)
-        self._nav(1)
+        self.btn_auto.clicked.connect(lambda: self._nav(0))
+        self.btn_bots.clicked.connect(lambda: self._nav(1))
+        self.btn_accounts.clicked.connect(lambda: self._nav(2))
+        self.btn_tokens.clicked.connect(lambda: self._nav(3))
+        self.btn_stats.clicked.connect(lambda: self._nav(4))
+        self.btn_manage.clicked.connect(lambda: self._nav(5))
+        self.btn_settings.clicked.connect(lambda: self._nav(6))
+        self._nav(0)
 
         self.bridge.request_code.connect(self._ask_code)
         self.bridge.request_password.connect(self._ask_password)
@@ -2224,6 +2830,7 @@ class BotFactoryApp(QMainWindow):
         QApplication.instance().installEventFilter(self.animator)
         self.onboarding_overlay = OnboardingOverlay(self)
         self.onboarding_overlay.hide()
+        self.apply_language(self.cfg.language)
         QTimer.singleShot(0, lambda: center_on_screen(self))
         QTimer.singleShot(200, self._maybe_first_run)
         self.auto_page_update_hamsters()
@@ -2293,6 +2900,22 @@ class BotFactoryApp(QMainWindow):
             font-weight: 600;
         }
         #Input:focus { border: 1px solid rgba(120, 60, 255, 0.50); background: rgba(255,255,255,0.08); }
+        QComboBox QAbstractItemView {
+            background: rgba(12,18,34,0.98);
+            color: rgba(236,242,250,0.98);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 16px;
+            selection-background-color: rgba(120, 60, 255, 0.28);
+            selection-color: rgba(236,242,250,0.98);
+            padding: 6px;
+            outline: 0;
+        }
+        QComboBox QAbstractItemView::item {
+            min-height: 26px;
+        }
+        QComboBox::drop-down {
+            width: 24px;
+        }
 
         QMainWindow[compact="true"] #Input {
             min-height: 30px;
@@ -2319,6 +2942,16 @@ class BotFactoryApp(QMainWindow):
                 stop:0 rgba(120, 60, 255, 0.24),
                 stop:1 rgba(0, 200, 255, 0.20));
             border: 1px solid rgba(120, 60, 255, 0.30);
+        }
+        #NavBtn:disabled {
+            color: rgba(236,242,250,0.72);
+        }
+        #NavBtn[active="true"]:disabled {
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                stop:0 rgba(120, 60, 255, 0.24),
+                stop:1 rgba(0, 200, 255, 0.20));
+            border: 1px solid rgba(120, 60, 255, 0.30);
+            color: rgba(236,242,250,0.90);
         }
         #NavBtn[onboarding="true"] {
             background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
@@ -2387,10 +3020,10 @@ class BotFactoryApp(QMainWindow):
         QTreeWidget::item { color: rgba(230,237,243,0.92); font-weight: 900; }
         QTreeWidget::item:selected { background: rgba(120, 60, 255, 0.20); }
         QTreeWidget::item:alternate { background: rgba(255,255,255,0.03); }
-        QTreeWidget QAbstractScrollArea::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
-        QTreeView::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
-        QTableView::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
-        QTableCornerButton::section { background: rgba(18,26,46,0.85); border: none; border-radius: 20px; }
+        QTreeWidget QAbstractScrollArea::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 16px; }
+        QTreeView::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 16px; }
+        QTableView::corner { background: rgba(18,26,46,0.85); border: none; border-radius: 16px; }
+        QTableCornerButton::section { background: rgba(18,26,46,0.85); border: none; border-radius: 16px; }
         QTreeWidget::indicator {
             width: 16px;
             height: 16px;
@@ -2432,7 +3065,7 @@ class BotFactoryApp(QMainWindow):
         #StatsTable {
             background: rgba(8, 12, 22, 0.40);
             border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 24px;
+            border-radius: 16px;
             color: rgba(236,242,250,0.92);
             gridline-color: rgba(255,255,255,0.06);
         }
@@ -2447,11 +3080,11 @@ class BotFactoryApp(QMainWindow):
             background: rgba(120, 60, 255, 0.20);
         }
         QTableWidget, QTreeWidget, QTableView, QTreeView, QAbstractScrollArea {
-            border-radius: 24px;
+            border-radius: 16px;
             background: rgba(8, 12, 22, 0.35);
         }
         QTableView::viewport, QTreeView::viewport, QAbstractScrollArea::viewport {
-            border-radius: 24px;
+            border-radius: 16px;
             background: transparent;
         }
         QHeaderView::section {
@@ -2460,7 +3093,13 @@ class BotFactoryApp(QMainWindow):
             border: none;
             padding: 8px;
             font-weight: 700;
-            border-radius: 0px;
+            border-radius: 16px;
+        }
+        QHeaderView::section:first {
+            border-top-left-radius: 16px;
+        }
+        QHeaderView::section:last {
+            border-top-right-radius: 16px;
         }
 
         QDialog#PremiumDialog { background: transparent; }
@@ -2504,9 +3143,11 @@ class BotFactoryApp(QMainWindow):
 
     def _nav(self, idx: int):
         self.stack.setCurrentIndex(idx)
-        btns = [self.btn_manual, self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats]
+        btns = [self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats, self.btn_manage, self.btn_settings]
         for i, b in enumerate(btns):
-            b.setProperty("active", "true" if i == idx else "false")
+            is_active = i == idx
+            b.setProperty("active", "true" if is_active else "false")
+            b.setEnabled(not is_active)
             b.style().unpolish(b)
             b.style().polish(b)
         try:
@@ -2527,17 +3168,9 @@ class BotFactoryApp(QMainWindow):
                 QTimer.singleShot(200, self.open_onboarding)
 
     def open_onboarding(self):
-        steps = [
-            ("Ручное создание", "• Укажите чат BotFather.\n• Введите имя бота — это название, которое увидят пользователи.\n• Введите username — адрес вида @имя_бота.\n• Выберите картинку, чтобы бот выглядел завершённо.\n• Нажмите «Запуск (Ручной режим)», чтобы создать одного бота."),
-            ("Авто‑создание", "• Имена вводите через «/», например: name1/name2/name3.\n• Выберите хомяка — это процентное распределение токенов.\n• Выберите картинку, которая будет назначена всем создаваемым ботам.\n• Нажмите «Запуск (Авто режим)».\n• Лимит ботов на аккаунт можно менять здесь же."),
-            ("Боты", "• Здесь список созданных ботов.\n• Видно аккаунт, на котором создан бот, и дату создания.\n• Нажмите «Обновить», чтобы подтянуть свежие данные после запуска."),
-            ("Аккаунты", "• Добавляйте аккаунты в формате phone:password:api_id:api_hash.\n• Используйте «Авторизовать все», чтобы проверить вход.\n• «Авторизовать ошибки» — только проблемные аккаунты.\n• Статусы показывают причину ошибок."),
-            ("Токены", "• Токены сгруппированы по датам.\n• Раскрывайте дату стрелкой, чтобы увидеть токены.\n• Копируйте выбранные группы, редактируйте и удаляйте записи."),
-            ("Статистика", "• Создавайте хомяков с процентами.\n• Видите количество ботов по каждому хомяку.\n• Можно редактировать и удалять записи."),
-            ("Финал", "Поздравляю, теперь ты знаешь базовые функции этого приложения!🎉\n\ncreated by whynot_repow")
-        ]
+        steps = self._onboarding_steps()
         def _sync_section(idx: int):
-            targets = [self.btn_manual, self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats]
+            targets = [self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats, self.btn_manage]
             if idx < len(targets):
                 self._nav(idx)
                 self.onboarding_overlay.set_target_widget(targets[idx])
@@ -2548,6 +3181,18 @@ class BotFactoryApp(QMainWindow):
         self.onboarding_overlay.open_overlay()
         self.onboarding_overlay.raise_()
         _sync_section(0)
+
+    def _onboarding_steps(self) -> List[Tuple[str, str]]:
+        t = self._translations().get(self.cfg.language, self._translations()["Русский"])
+        return [
+            (t["onb_auto_title"], t["onb_auto_body"]),
+            (t["onb_bots_title"], t["onb_bots_body"]),
+            (t["onb_accounts_title"], t["onb_accounts_body"]),
+            (t["onb_tokens_title"], t["onb_tokens_body"]),
+            (t["onb_stats_title"], t["onb_stats_body"]),
+            (t["onb_manage_title"], t["onb_manage_body"]),
+            (t["onb_final_title"], t["onb_final_body"]),
+        ]
 
     def resizeEvent(self, event):
         w = self.width()
@@ -2597,6 +3242,197 @@ class BotFactoryApp(QMainWindow):
     def log(self, s: str):
         self.logbox.append(s)
 
+    def _translations(self) -> Dict[str, Dict[str, str]]:
+        return {
+            "Русский": {
+                "nav_auto": "Автоматическое создание",
+                "nav_bots": "Боты",
+                "nav_accounts": "Аккаунты",
+                "nav_tokens": "Токены",
+                "nav_stats": "Статистика",
+                "nav_manage": "Удаление / Revoke",
+                "nav_settings": "Настройки",
+                "auto_title": "Автоматическое создание",
+                "auto_chat": "Чат:",
+                "auto_names": "Имена:",
+                "auto_hamster": "Хомяк:",
+                "auto_names_placeholder": "name/name2/name3 (без пробелов желательно)",
+                "auto_pick_img": "Выбрать картинку (обязательно)",
+                "auto_open_tokens": "Открыть tokens.txt",
+                "auto_limit_edit": "Изменить лимит",
+                "auto_limit_hint": "Лимит: {limit} бота(ов) на аккаунт за 1 запуск (1 запуск = 1 круг).",
+                "auto_custom": "Кастомизация",
+                "auto_edit": "Изменить",
+                "auto_start": "Запуск (Авто режим)",
+                "auto_stop": "Стоп",
+                "bots_title": "Боты",
+                "bots_hint": "Список ботов и аккаунтов, на которых они созданы.",
+                "bots_refresh": "Обновить",
+                "accounts_title": "Аккаунты",
+                "accounts_hint": "Управление аккаунтами и авторизацией.",
+                "accounts_add": "Добавить аккаунты",
+                "accounts_delete": "Удалить аккаунт",
+                "accounts_auth_all": "Авторизовать все",
+                "accounts_auth_failed": "Авторизовать ошибки",
+                "accounts_refresh": "Обновить",
+                "tokens_title": "Токены",
+                "tokens_hint": "Токены сгруппированы по датам. Можно копировать, редактировать и удалять.",
+                "tokens_placeholder": "Токены для выбранной даты (по одному в строке)...",
+                "tokens_refresh": "Обновить",
+                "tokens_save": "Сохранить изменения",
+                "tokens_copy_selected": "Копировать выбранные",
+                "tokens_copy_latest": "Копировать последние",
+                "tokens_delete_selected": "Удалить выбранные",
+                "tokens_clear": "Очистить список",
+                "stats_title": "Статистика",
+                "stats_name_placeholder": "Название хомяка",
+                "stats_percent_label": "Процент:",
+                "stats_add": "Добавить хомяка",
+                "stats_edit": "Редактировать",
+                "stats_delete": "Удалить выбранный",
+                "stats_refresh": "Обновить",
+                "manage_title": "Удаление и Revoke Token",
+                "manage_hint": "Выберите ботов в таблице для массового удаления или revoke токена.",
+                "manage_refresh": "Обновить список",
+                "manage_delete_mass": "Массовое удаление",
+                "manage_delete_single": "Единичное удаление",
+                "manage_revoke_mass": "Массовый Revoke",
+                "manage_revoke_single": "Revoke Token",
+                "manage_open_revoked": "Открыть revoke_tokens.txt",
+                "settings_title": "Настройки",
+                "settings_hint": "Управление языком, автозапуском и резервными копиями.",
+                "settings_language": "Язык:",
+                "settings_autostart_label": "Автозапуск с Windows:",
+                "settings_autostart_toggle": "Включить автозапуск",
+                "settings_backup": "Создать резервную копию",
+                "settings_restore": "Импорт резервной копии",
+                "settings_reset": "Сброс до заводских настроек",
+                "settings_onboarding": "Мастер новичка",
+                "settings_support": "Тех. Поддержка",
+                "onb_auto_title": "Авто‑создание",
+                "onb_auto_body": "• Имена вводите через «/», например: name1/name2/name3.\n• Выберите хомяка — используйте если ботов нашел другой человек\n• Выберите картинку, которая будет назначена всем создаваемым ботам.\n• Нажмите «Запуск (Авто режим)».\n• Лимит ботов на аккаунт можно менять здесь же.",
+                "onb_bots_title": "Боты",
+                "onb_bots_body": "• Здесь список созданных ботов.\n• Видно аккаунт, на котором создан бот, и дату создания.\n• Нажмите «Обновить», чтобы подтянуть свежие данные после запуска.",
+                "onb_accounts_title": "Аккаунты",
+                "onb_accounts_body": "• Добавляйте аккаунты в формате phone:password:api_id:api_hash.\n• Используйте «Авторизовать все», чтобы проверить вход.\n• «Авторизовать ошибки» — только проблемные аккаунты.\n• Статусы показывают причину ошибок.",
+                "onb_tokens_title": "Токены",
+                "onb_tokens_body": "• Токены сгруппированы по датам.\n• Раскрывайте дату стрелкой, чтобы увидеть токены.\n• Копируйте выбранные группы, редактируйте и удаляйте записи.",
+                "onb_stats_title": "Статистика",
+                "onb_stats_body": "• Создавайте хомяков с процентами.\n• Видите количество ботов по каждому хомяку.\n• Можно редактировать и удалять записи.",
+                "onb_manage_title": "Удаление / Revoke",
+                "onb_manage_body": "• Выберите ботов в таблице.\n• Массовое удаление — удаляет всех выбранных ботов.\n• Единичное удаление — удаляет выбранного бота.\n• Revoke Token — получает новый токен и сохраняет в revoke_tokens.txt.",
+                "onb_final_title": "Финал",
+                "onb_final_body": "Поздравляю, теперь ты знаешь базовые функции этого приложения!🎉\n\ncreated by whynot_repow"
+            },
+            "English": {
+                "nav_auto": "Auto creation",
+                "nav_bots": "Bots",
+                "nav_accounts": "Accounts",
+                "nav_tokens": "Tokens",
+                "nav_stats": "Stats",
+                "nav_manage": "Delete / Revoke",
+                "nav_settings": "Settings",
+                "auto_title": "Auto creation",
+                "auto_chat": "Chat:",
+                "auto_names": "Names:",
+                "auto_hamster": "Hamster:",
+                "auto_names_placeholder": "name/name2/name3 (no spaces preferred)",
+                "auto_pick_img": "Pick image (required)",
+                "auto_open_tokens": "Open tokens.txt",
+                "auto_limit_edit": "Change limit",
+                "auto_limit_hint": "Limit: {limit} bot(s) per account per run (1 run = 1 round).",
+                "auto_custom": "Customization",
+                "auto_edit": "Edit",
+                "auto_start": "Start (Auto mode)",
+                "auto_stop": "Stop",
+                "bots_title": "Bots",
+                "bots_hint": "List of bots and the accounts they were created on.",
+                "bots_refresh": "Refresh",
+                "accounts_title": "Accounts",
+                "accounts_hint": "Manage accounts and authorization.",
+                "accounts_add": "Add accounts",
+                "accounts_delete": "Delete account",
+                "accounts_auth_all": "Authorize all",
+                "accounts_auth_failed": "Authorize failed",
+                "accounts_refresh": "Refresh",
+                "tokens_title": "Tokens",
+                "tokens_hint": "Tokens are grouped by dates. You can copy, edit, and delete them.",
+                "tokens_placeholder": "Tokens for the selected date (one per line)...",
+                "tokens_refresh": "Refresh",
+                "tokens_save": "Save changes",
+                "tokens_copy_selected": "Copy selected",
+                "tokens_copy_latest": "Copy latest",
+                "tokens_delete_selected": "Delete selected",
+                "tokens_clear": "Clear list",
+                "stats_title": "Stats",
+                "stats_name_placeholder": "Hamster name",
+                "stats_percent_label": "Percent:",
+                "stats_add": "Add hamster",
+                "stats_edit": "Edit",
+                "stats_delete": "Delete selected",
+                "stats_refresh": "Refresh",
+                "manage_title": "Delete and Revoke Token",
+                "manage_hint": "Select bots in the table for deletion or token revoke.",
+                "manage_refresh": "Refresh list",
+                "manage_delete_mass": "Mass delete",
+                "manage_delete_single": "Single delete",
+                "manage_revoke_mass": "Mass revoke",
+                "manage_revoke_single": "Revoke token",
+                "manage_open_revoked": "Open revoke_tokens.txt",
+                "settings_title": "Settings",
+                "settings_hint": "Manage language, autostart, and backups.",
+                "settings_language": "Language:",
+                "settings_autostart_label": "Autostart with Windows:",
+                "settings_autostart_toggle": "Enable autostart",
+                "settings_backup": "Create backup",
+                "settings_restore": "Import backup",
+                "settings_reset": "Factory reset",
+                "settings_onboarding": "Onboarding wizard",
+                "settings_support": "Support",
+                "onb_auto_title": "Auto creation",
+                "onb_auto_body": "• Enter names using “/”, e.g., name1/name2/name3.\n• Choose a hamster — use this if the bots were found by another person.\n• Choose an image that will be assigned to all created bots.\n• Click “Start (Auto mode)”.\n• Account bot limit can be changed here.",
+                "onb_bots_title": "Bots",
+                "onb_bots_body": "• List of created bots.\n• Shows the account and creation date.\n• Click “Refresh” to sync new data.",
+                "onb_accounts_title": "Accounts",
+                "onb_accounts_body": "• Add accounts as phone:password:api_id:api_hash.\n• Use “Authorize all” to check login.\n• “Authorize failed” checks only problematic accounts.\n• Statuses show error reasons.",
+                "onb_tokens_title": "Tokens",
+                "onb_tokens_body": "• Tokens are grouped by date.\n• Expand a date to see tokens.\n• Copy, edit, or delete groups.",
+                "onb_stats_title": "Stats",
+                "onb_stats_body": "• Create hamsters with percentages.\n• See bot count per hamster.\n• You can edit or delete entries.",
+                "onb_manage_title": "Delete / Revoke",
+                "onb_manage_body": "• Select bots in the table.\n• Mass delete removes all selected bots.\n• Single delete removes the selected bot.\n• Revoke token generates a new token and saves it to revoke_tokens.txt.",
+                "onb_final_title": "Finish",
+                "onb_final_body": "Congrats, you now know the main features of this app!🎉\n\ncreated by whynot_repow"
+            }
+        }
+
+    def apply_language(self, lang: str):
+        t = self._translations().get(lang, self._translations()["Русский"])
+        self.btn_auto.setText(t["nav_auto"])
+        self.btn_bots.setText(t["nav_bots"])
+        self.btn_accounts.setText(t["nav_accounts"])
+        self.btn_tokens.setText(t["nav_tokens"])
+        self.btn_stats.setText(t["nav_stats"])
+        self.btn_manage.setText(t["nav_manage"])
+        self.btn_settings.setText(t["nav_settings"])
+        self.auto_page.update_language(t)
+        self.bots_page.update_language(t)
+        self.accounts_page.update_language(t)
+        self.tokens_page.update_language(t)
+        self.stats_page.update_language(t)
+        self.manage_page.update_language(t)
+        self.settings_page.update_language(t)
+        self.auto_page.update_limit_hint()
+
+    def format_limit_hint(self, limit: int) -> str:
+        t = self._translations().get(self.cfg.language, self._translations()["Русский"])
+        return t["auto_limit_hint"].format(limit=limit)
+
+    def set_language(self, lang: str):
+        self.cfg.language = lang
+        self.save_config()
+        self.apply_language(lang)
+
     def pick_image(self):
         p, _ = QFileDialog.getOpenFileName(self, "Выбрать картинку", str(BASE_DIR), "Images (*.png *.jpg *.jpeg *.webp)")
         if p:
@@ -2607,6 +3443,205 @@ class BotFactoryApp(QMainWindow):
         path = self.cfg.tokens_txt_path()
         ensure_file(path)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def open_revoked_tokens_txt(self):
+        path = self.cfg.revoked_tokens_txt_path()
+        ensure_file(path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _startup_bat_path(self) -> Optional[Path]:
+        if not sys.platform.startswith("win"):
+            return None
+        startup_dir = Path(os.getenv("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        return startup_dir / "BotFactory_Autostart.bat"
+
+    def is_autostart_enabled(self) -> bool:
+        bat_path = self._startup_bat_path()
+        return bool(bat_path and bat_path.exists())
+
+    def toggle_autostart(self, enabled: bool):
+        bat_path = self._startup_bat_path()
+        if not bat_path:
+            show_message(self, "Автозапуск", "Автозапуск доступен только в Windows.")
+            if self.settings_page:
+                self.settings_page.autostart_toggle.setChecked(False)
+            return
+        try:
+            if enabled:
+                bat_path.parent.mkdir(parents=True, exist_ok=True)
+                cmd = f"@echo off\ncd /d \"{BASE_DIR}\"\n\"{sys.executable}\" \"{BASE_DIR / 'app.py'}\"\n"
+                bat_path.write_text(cmd, encoding="utf-8")
+                show_message(self, "Автозапуск", "Автозапуск включён.")
+            else:
+                if bat_path.exists():
+                    bat_path.unlink()
+                show_message(self, "Автозапуск", "Автозапуск отключён.")
+        except Exception as e:
+            show_message(self, "Автозапуск", f"Ошибка автозапуска: {e}")
+            if self.settings_page:
+                self.settings_page.autostart_toggle.setChecked(self.is_autostart_enabled())
+
+    def create_backup(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить резервную копию", str(BASE_DIR / "backup.zip"), "ZIP (*.zip)")
+        if not path:
+            return
+        try:
+            files = [
+                CONFIG_FILE,
+                ACCOUNTS_FILE,
+                HAMSTERS_FILE,
+                FROZEN_FILE,
+                ACCOUNTS_STATUS_FILE,
+                self.cfg.tokens_txt_path(),
+                self.cfg.tokens_csv_path(),
+                self.cfg.revoked_tokens_txt_path(),
+            ]
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in files:
+                    if f.exists():
+                        zf.write(f, f.relative_to(BASE_DIR))
+                if SESSIONS_DIR.exists():
+                    for root, _, filenames in os.walk(SESSIONS_DIR):
+                        for fname in filenames:
+                            full = Path(root) / fname
+                            zf.write(full, full.relative_to(BASE_DIR))
+            show_message(self, "Резервная копия", "Резервная копия создана.")
+        except Exception as e:
+            show_message(self, "Резервная копия", f"Ошибка создания: {e}")
+
+    def restore_backup(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Импорт резервной копии", str(BASE_DIR), "ZIP (*.zip)")
+        if not path:
+            return
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                zf.extractall(BASE_DIR)
+            show_message(self, "Импорт резервной копии", "Резервная копия импортирована. Перезапустите приложение.")
+        except Exception as e:
+            show_message(self, "Импорт резервной копии", f"Ошибка импорта: {e}")
+
+    def reset_factory(self):
+        try:
+            for f in [CONFIG_FILE, ACCOUNTS_FILE, HAMSTERS_FILE, FROZEN_FILE, ACCOUNTS_STATUS_FILE,
+                      self.cfg.tokens_txt_path(), self.cfg.tokens_csv_path(), self.cfg.revoked_tokens_txt_path()]:
+                if f.exists():
+                    f.unlink()
+            if SESSIONS_DIR.exists():
+                shutil.rmtree(SESSIONS_DIR, ignore_errors=True)
+            ensure_file(self.cfg.tokens_txt_path())
+            ensure_file(self.cfg.tokens_csv_path())
+            ensure_file(self.cfg.revoked_tokens_txt_path())
+            show_message(self, "Сброс", "Настройки сброшены. Перезапустите приложение.")
+        except Exception as e:
+            show_message(self, "Сброс", f"Ошибка сброса: {e}")
+
+    def open_support(self):
+        QDesktopServices.openUrl(QUrl("https://t.me/whynot_repow"))
+
+    def _selected_manage_targets(self) -> List[Dict[str, str]]:
+        return self.manage_page.selected_targets()
+
+    def delete_mass(self):
+        if self.worker and self.worker.isRunning():
+            show_message(self, "Уже работает", "Сначала остановите текущий процесс.")
+            return
+        targets = self._selected_manage_targets()
+        if not targets:
+            show_message(self, "Ошибка", "Выберите ботов в таблице для массового удаления.")
+            return
+        self.log(f"[INFO] Массовое удаление: {len(targets)} ботов.")
+        self.worker = Worker(
+            "delete",
+            self.cfg.botfather,
+            [],
+            "None",
+            "",
+            self.cfg,
+            self.bridge,
+            self.bot_overrides,
+            self.account_status,
+            delete_targets=targets
+        )
+        self.worker.log.connect(self.log)
+        self.worker.progress.connect(self.log)
+        self.worker.start()
+
+    def delete_single(self):
+        if self.worker and self.worker.isRunning():
+            show_message(self, "Уже работает", "Сначала остановите текущий процесс.")
+            return
+        targets = self._selected_manage_targets()
+        if len(targets) != 1:
+            show_message(self, "Ошибка", "Выберите одного бота для единичного удаления.")
+            return
+        self.log(f"[INFO] Единичное удаление: @{targets[0]['username']}.")
+        self.worker = Worker(
+            "delete",
+            self.cfg.botfather,
+            [],
+            "None",
+            "",
+            self.cfg,
+            self.bridge,
+            self.bot_overrides,
+            self.account_status,
+            delete_targets=targets
+        )
+        self.worker.log.connect(self.log)
+        self.worker.progress.connect(self.log)
+        self.worker.start()
+
+    def revoke_token(self):
+        if self.worker and self.worker.isRunning():
+            show_message(self, "Уже работает", "Сначала остановите текущий процесс.")
+            return
+        targets = self._selected_manage_targets()
+        if len(targets) != 1:
+            show_message(self, "Ошибка", "Выберите одного бота для revoke token.")
+            return
+        self.log(f"[INFO] Revoke token: @{targets[0]['username']}.")
+        self.worker = Worker(
+            "revoke",
+            self.cfg.botfather,
+            [],
+            "None",
+            "",
+            self.cfg,
+            self.bridge,
+            self.bot_overrides,
+            self.account_status,
+            revoke_targets=targets
+        )
+        self.worker.log.connect(self.log)
+        self.worker.progress.connect(self.log)
+        self.worker.finished_ok.connect(self._on_revoke_finished)
+        self.worker.start()
+
+    def revoke_mass(self):
+        if self.worker and self.worker.isRunning():
+            show_message(self, "Уже работает", "Сначала остановите текущий процесс.")
+            return
+        targets = self._selected_manage_targets()
+        if not targets:
+            show_message(self, "Ошибка", "Выберите ботов для массового revoke.")
+            return
+        self.log(f"[INFO] Массовый revoke: {len(targets)} ботов.")
+        self.worker = Worker(
+            "revoke",
+            self.cfg.botfather,
+            [],
+            "None",
+            "",
+            self.cfg,
+            self.bridge,
+            self.bot_overrides,
+            self.account_status,
+            revoke_targets=targets
+        )
+        self.worker.log.connect(self.log)
+        self.worker.progress.connect(self.log)
+        self.worker.finished_ok.connect(self._on_revoke_finished)
+        self.worker.start()
 
     def _ask_code(self, phone: str):
         code = show_input_dialog(self, "Код авторизации", f"Введите код для {phone}:")
@@ -2620,6 +3655,38 @@ class BotFactoryApp(QMainWindow):
         if self.worker:
             self.worker.stop()
             self.log("[INFO] Stop запрошен.")
+
+    def _on_auto_finished(self):
+        worker = self.worker
+        if not worker or worker.mode != "auto":
+            return
+        if worker.too_many_phones:
+            phones = ", ".join(sorted(worker.too_many_phones))
+            show_message(self, "Лимит ботов", f"На аккаунтах достигнут лимит 20 ботов: {phones}")
+        if worker.no_available_accounts:
+            remaining = worker.remaining_names or []
+            rest = "/".join(remaining)
+            show_copy_dialog(
+                self,
+                "Нет доступных аккаунтов",
+                "Бот не смог создать ни одного бота за 3 круга аккаунтов.\nОстаток имён для создания:",
+                rest
+            )
+
+    def _on_revoke_finished(self):
+        worker = self.worker
+        if not worker or worker.mode != "revoke":
+            return
+        if not worker.revoked_results:
+            show_message(self, "Revoke завершён", "Токены не были получены.")
+            return
+        lines = [f"@{name}: {token}" for name, token in worker.revoked_results]
+        show_copy_dialog(
+            self,
+            "Revoke завершён",
+            "Операция завершена. Полученные токены:",
+            "\n".join(lines)
+        )
 
 
     def open_customization(self):
@@ -2823,6 +3890,7 @@ class BotFactoryApp(QMainWindow):
         self.worker = Worker("auto", chat, names, hamster, self.image_path, self.cfg, self.bridge, self.bot_overrides, self.account_status)
         self.worker.log.connect(self.log)
         self.worker.progress.connect(self.log)
+        self.worker.finished_ok.connect(self._on_auto_finished)
         self.worker.start()
 
     def start_manual(self):
