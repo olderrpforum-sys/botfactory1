@@ -13,8 +13,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve, QUrl
-from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QLinearGradient, QPen, QBrush, QDesktopServices, QPainterPath
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QPropertyAnimation, QEasingCurve, QUrl
+from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QLinearGradient, QPen, QBrush, QDesktopServices
 from PyQt6.QtWidgets import (
     QTextBrowser,
     QPlainTextEdit,
@@ -1094,7 +1094,7 @@ class Worker(QThread):
             timeout=25.0
         )
         if not start_prompt:
-            self.log.emit("[WARN] Нет запроса имени от BotFather.")
+            self.log.emit("[WARN] Нет запроса имени от BotFather. (Возможно лимит 20 ботов")
             return None
         if has_too_many_bots(start_prompt):
             self.account_status[self.current_phone] = {"state": "too_many", "reason": "20+"}
@@ -1116,7 +1116,7 @@ class Worker(QThread):
             timeout=25.0
         )
         if not name_prompt:
-            self.log.emit("[WARN] Нет запроса username от BotFather.")
+            self.log.emit("[WARN] Нет запроса username от BotFather. (Возможно лимит 20 ботов")
             return None
 
         for uname in self._build_username_candidates(base_name):
@@ -1238,7 +1238,7 @@ class Worker(QThread):
             timeout=25.0
         )
         if not done:
-            self.log.emit("[WARN] Нет подтверждения установки аватарки.")
+            self.log.emit("[WARN] Нет подтверждения установки аватарки. (Возможно не успела загрузиться, проверьте вручную)")
 
     def _write_token(self, username: str, token: str, hamster: str, account: str):
         ensure_file(self.cfg.tokens_txt_path())
@@ -1431,7 +1431,7 @@ class Worker(QThread):
                     if sec and sec > self.cfg.freeze_threshold_seconds:
                         frozen[acc["phone"]] = int(time.time()) + sec + 2
                         save_json(FROZEN_FILE, frozen)
-                        self.log.emit(f"[FREEZE] {acc['phone']} заморожен на {sec}s. Переходим к следующему аккаунту, бот НЕ потерян.")
+                        self.log.emit(f"[FREEZE] {acc['phone']} заморожен на {sec}s. Переходим к следующему аккаунту, начинаю создание заново.")
                     else:
                         self.log.emit("[WARN] Не удалось создать бота — пробуем другим аккаунтом.")
                     if round_attempts >= len(accs):
@@ -1455,7 +1455,7 @@ class Worker(QThread):
                     self._write_token(username, token, self.hamster, acc["phone"])
                     self.log.emit("[OK] Токен сохранён.")
                 else:
-                    self.log.emit("[WARN] Токен не найден (редко).")
+                    self.log.emit("[WARN] Токен не найден (Проверьте вручную).")
 
                 await self._set_userpic(client, username)
                 per_acc[acc["phone"]] += 1
@@ -1615,7 +1615,7 @@ class AutoPage(QWidget):
 
         self.chat = QLineEdit(BOTFATHER_USERNAME_DEFAULT); self.chat.setObjectName("Input")
         self.names = QLineEdit(""); self.names.setObjectName("Input")
-        self.names.setPlaceholderText("name/name2/name3 (без пробелов желательно)")
+        self.names.setPlaceholderText("name/name2/name3 (без пробелов)")
 
         self.hamster = QComboBox(); self.hamster.setObjectName("Input")
         hamster_view = QListView()
@@ -1638,7 +1638,7 @@ class AutoPage(QWidget):
         form.addRow(self.lbl_hamster, self.hamster)
 
         row = QHBoxLayout()
-        self.pick_img = QPushButton("Выбрать картинку (обязательно)"); self.pick_img.setObjectName("PrimaryBtn")
+        self.pick_img = QPushButton("Выбрать аватарку (обязательно)"); self.pick_img.setObjectName("PrimaryBtn")
         self.pick_img.clicked.connect(self.ui.pick_image)
         self.open_tokens = QPushButton("Открыть tokens.txt"); self.open_tokens.setObjectName("SecondaryBtn")
         self.open_tokens.clicked.connect(self.ui.open_tokens_txt)
@@ -1926,13 +1926,9 @@ class SettingsPage(QWidget):
         c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
 
         self.title = QLabel("Настройки"); self.title.setObjectName("PageTitle")
+        self.hint = QLabel(""); self.hint.setObjectName("Hint")
         c.addWidget(self.title)
-
-        self.hero = QLabel()
-        self.hero.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.hero.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.hero.setFixedHeight(260)
-        c.addWidget(self.hero)
+        c.addWidget(self.hint)
 
         form = QFormLayout()
         form.setHorizontalSpacing(16)
@@ -1990,7 +1986,7 @@ class SettingsPage(QWidget):
 
     def update_language(self, t: Dict[str, str]):
         self.title.setText(t["settings_title"])
-        self._load_hero_image()
+        self.hint.setText(t["settings_hint"])
         self.lang_label.setText(t["settings_language"])
         self.autostart_label.setText(t["settings_autostart_label"])
         self.autostart_toggle.setText(t["settings_autostart_toggle"])
@@ -1999,37 +1995,6 @@ class SettingsPage(QWidget):
         self.reset_btn.setText(t["settings_reset"])
         self.onboarding_btn.setText(t["settings_onboarding"])
         self.support_btn.setText(t["settings_support"])
-
-    def _load_hero_image(self):
-        img_path = BASE_DIR / "settings_title.png"
-        if not img_path.exists():
-            self.hero.setText("BotFactory")
-            self.hero.setObjectName("Hint")
-            return
-        pm = QPixmap(str(img_path))
-        if pm.isNull():
-            self.hero.setText("BotFactory")
-            self.hero.setObjectName("Hint")
-            return
-        available_w = max(300, self.width() - 36)
-        max_w = min(available_w, 1400)
-        max_h = 260
-        target = pm.scaled(max_w, max_h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        rounded = QPixmap(target.size())
-        rounded.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(rounded)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(0, 0, target.width(), target.height())
-        path = QPainterPath()
-        path.addRoundedRect(rect, 22, 22)
-        painter.setClipPath(path)
-        painter.drawPixmap(rect.toRect(), target)
-        painter.end()
-        self.hero.setPixmap(rounded)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._load_hero_image()
 
 class TokensPage(QWidget):
     def __init__(self, ui):
@@ -2387,7 +2352,7 @@ class AccountsPage(QWidget):
         c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
 
         self.title = QLabel("Аккаунты"); self.title.setObjectName("PageTitle")
-        self.hint = QLabel("Управление аккаунтами и авторизацией."); self.hint.setObjectName("Hint")
+        self.hint = QLabel(""); self.hint.setObjectName("Hint")
         c.addWidget(self.title)
         c.addWidget(self.hint)
 
@@ -3256,13 +3221,13 @@ class BotFactoryApp(QMainWindow):
                 "auto_chat": "Чат:",
                 "auto_names": "Имена:",
                 "auto_hamster": "Хомяк:",
-                "auto_names_placeholder": "name/name2/name3 (без пробелов желательно)",
-                "auto_pick_img": "Выбрать картинку (обязательно)",
+                "auto_names_placeholder": "name/name2/name3 (без пробелов)",
+                "auto_pick_img": "Выбрать аватарку (обязательно)",
                 "auto_open_tokens": "Открыть tokens.txt",
                 "auto_limit_edit": "Изменить лимит",
                 "auto_limit_hint": "Лимит: {limit} бота(ов) на аккаунт за 1 запуск (1 запуск = 1 круг).",
-                "auto_custom": "Кастомизация",
-                "auto_edit": "Изменить",
+                "auto_custom": "Кастомизация (all bots)",
+                "auto_edit": "Изменить (one bot)",
                 "auto_start": "Запуск (Авто режим)",
                 "auto_stop": "Стоп",
                 "bots_title": "Боты",
@@ -3300,7 +3265,7 @@ class BotFactoryApp(QMainWindow):
                 "manage_revoke_single": "Revoke Token",
                 "manage_open_revoked": "Открыть revoke_tokens.txt",
                 "settings_title": "Настройки",
-                "settings_hint": "Управление языком, автозапуском и резервными копиями.",
+                "settings_hint": "",
                 "settings_language": "Язык:",
                 "settings_autostart_label": "Автозапуск с Windows:",
                 "settings_autostart_toggle": "Включить автозапуск",
@@ -3318,11 +3283,11 @@ class BotFactoryApp(QMainWindow):
                 "onb_tokens_title": "Токены",
                 "onb_tokens_body": "• Токены сгруппированы по датам.\n• Раскрывайте дату стрелкой, чтобы увидеть токены.\n• Копируйте выбранные группы, редактируйте и удаляйте записи.",
                 "onb_stats_title": "Статистика",
-                "onb_stats_body": "• Создавайте хомяков с процентами.\n• Видите количество ботов по каждому хомяку.\n• Можно редактировать и удалять записи.",
+                "onb_stats_body": "• Создавайте хомяков с учетом их доли от заработка с ботов в процентах.\n• Просмотр кол-ва ботов по каждому хомяку.\n• Можно редактировать и удалять записи.",
                 "onb_manage_title": "Удаление / Revoke",
                 "onb_manage_body": "• Выберите ботов в таблице.\n• Массовое удаление — удаляет всех выбранных ботов.\n• Единичное удаление — удаляет выбранного бота.\n• Revoke Token — получает новый токен и сохраняет в revoke_tokens.txt.",
                 "onb_final_title": "Финал",
-                "onb_final_body": "Поздравляю, теперь ты знаешь базовые функции этого приложения!🎉\n\ncreated by whynot_repow"
+                "onb_final_body": "Поздравляю, теперь ты знаешь базовые функции этого приложения!🎉\n\ncreated by whynot"
             },
             "English": {
                 "nav_auto": "Auto creation",
@@ -3434,7 +3399,7 @@ class BotFactoryApp(QMainWindow):
         self.apply_language(lang)
 
     def pick_image(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Выбрать картинку", str(BASE_DIR), "Images (*.png *.jpg *.jpeg *.webp)")
+        p, _ = QFileDialog.getOpenFileName(self, "Выбрать аватарку", str(BASE_DIR), "Images (*.png *.jpg *.jpeg *.webp)")
         if p:
             self.image_path = p
             self.log(f"[OK] Картинка: {p}")
@@ -3731,8 +3696,8 @@ class BotFactoryApp(QMainWindow):
         w_prefix.setObjectName("Input")
         w_suffix.setObjectName("Input")
 
-        form.addRow("Префикс (будет ПЕРЕД именем):", w_prefix)
-        form.addRow("Суффикс (будет ПОСЛЕ имени):", w_suffix)
+        form.addRow("Префикс (будет ПЕРЕД СУФФИКСОМ):", w_prefix)
+        form.addRow("Суффикс (БУДЕТ ПОСЛЕ ПРЕФИКСА):", w_suffix)
 
         lay.addLayout(form)
         main.addWidget(card)
