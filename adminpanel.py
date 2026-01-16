@@ -24,8 +24,19 @@ app = Flask(__name__)
 
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
+        if not DB_PATH.exists():
+            init_db()
+        db = sqlite3.connect(DB_PATH)
+        db.row_factory = sqlite3.Row
+        needs_init = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone() is None
+        if needs_init:
+            db.close()
+            init_db()
+            db = sqlite3.connect(DB_PATH)
+            db.row_factory = sqlite3.Row
+        g.db = db
     return g.db
 
 
