@@ -13,8 +13,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QPropertyAnimation, QEasingCurve, QUrl
-from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QLinearGradient, QPen, QBrush, QDesktopServices
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve, QUrl
+from PyQt6 import sip
+from PyQt6.QtGui import QColor, QPainter, QPixmap, QIcon, QFont, QLinearGradient, QPen, QBrush, QDesktopServices, QPainterPath
 from PyQt6.QtWidgets import (
     QTextBrowser,
     QPlainTextEdit,
@@ -307,6 +308,9 @@ def animate_button_press(btn: QWidget, duration: int = 160):
         btn.setGraphicsEffect(None)
     anim.finished.connect(_cleanup)
     anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+def is_widget_alive(widget: Optional[QWidget]) -> bool:
+    return widget is not None and isinstance(widget, QWidget) and not sip.isdeleted(widget)
 
 def animate_evaporate_rect(parent: QWidget, rect: QRect, on_done=None):
     if parent is None or rect.isNull():
@@ -843,11 +847,14 @@ class OnboardingOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.steps = []
+        self.steps: List[Dict[str, Optional[object]]] = []
         self.step_index = 0
         self.on_step_changed = None
-        self.target_widget: Optional[QWidget] = None
-        self._last_target: Optional[QWidget] = None
+        self.accent_widget: Optional[QWidget] = None
+        self.spotlight_widget: Optional[QWidget] = None
+        self._last_accent: Optional[QWidget] = None
+        self._spotlight_padding = 10
+        self._spotlight_disabled = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 24, 24, 24)
@@ -902,19 +909,25 @@ class OnboardingOverlay(QWidget):
         lay.addWidget(self.card, 0, Qt.AlignmentFlag.AlignCenter)
         lay.addStretch(1)
 
-    def set_target_widget(self, widget: Optional[QWidget]):
-        if self._last_target is not None:
-            self._last_target.setProperty("onboarding", "false")
-            self._last_target.style().unpolish(self._last_target)
-            self._last_target.style().polish(self._last_target)
-        self.target_widget = widget
-        self._last_target = widget
-        if widget is not None:
-            widget.setProperty("onboarding", "true")
-            widget.style().unpolish(widget)
-            widget.style().polish(widget)
+    def set_targets(self, accent_widget: Optional[QWidget], spotlight_widget: Optional[QWidget] = None):
+        if is_widget_alive(self._last_accent):
+            self._last_accent.setProperty("onboarding", "false")
+            self._last_accent.style().unpolish(self._last_accent)
+            self._last_accent.style().polish(self._last_accent)
+        if not is_widget_alive(accent_widget):
+            accent_widget = None
+        self.accent_widget = accent_widget
+        self._last_accent = accent_widget
+        if is_widget_alive(accent_widget):
+            accent_widget.setProperty("onboarding", "true")
+            accent_widget.style().unpolish(accent_widget)
+            accent_widget.style().polish(accent_widget)
+        if not is_widget_alive(spotlight_widget):
+            spotlight_widget = None
+        self.spotlight_widget = spotlight_widget
+        self.update()
 
-    def set_steps(self, steps: List[Tuple[str, str]]):
+    def set_steps(self, steps: List[Dict[str, Optional[object]]]):
         self.steps = steps
         self.step_index = 0
         self._apply_step()
@@ -922,7 +935,11 @@ class OnboardingOverlay(QWidget):
     def _apply_step(self):
         if not self.steps:
             return
-        title, body = self.steps[self.step_index]
+        step = self.steps[self.step_index]
+        title = step.get("title", "")
+        body = step.get("body", "")
+        accent = step.get("accent")
+        spotlight = step.get("spotlight")
         try:
             self.text.setGraphicsEffect(None)
             self.title.setGraphicsEffect(None)
@@ -935,10 +952,15 @@ class OnboardingOverlay(QWidget):
         self.next.setText("Готово" if self.step_index >= len(self.steps) - 1 else "Далее")
         animate_fade(self.text, 1.0, 1.0, 1)
         animate_fade(self.title, 1.0, 1.0, 1)
-        self.text.setGraphicsEffect(None)
-        self.title.setGraphicsEffect(None)
         if callable(self.on_step_changed):
             self.on_step_changed(self.step_index)
+        self.set_targets(None, None)
+        def _apply_targets():
+            try:
+                self.set_targets(accent, spotlight)
+            except Exception:
+                self.set_targets(None, None)
+        QTimer.singleShot(0, _apply_targets)
 
     def next_step(self):
         if self.step_index >= len(self.steps) - 1:
@@ -960,14 +982,53 @@ class OnboardingOverlay(QWidget):
         animate_fade(self.card, 0.0, 1.0, 180)
 
     def close_overlay(self):
-        if self._last_target is not None:
-            self._last_target.setProperty("onboarding", "false")
-            self._last_target.style().unpolish(self._last_target)
-            self._last_target.style().polish(self._last_target)
+        if is_widget_alive(self._last_accent):
+            self._last_accent.setProperty("onboarding", "false")
+            self._last_accent.style().unpolish(self._last_accent)
+            self._last_accent.style().polish(self._last_accent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.hide()
         self.move(0, 0)
         self.setGeometry(self.parentWidget().rect())
+        self.spotlight_widget = None
+        self._spotlight_disabled = False
+        self.update()
+
+    def _spotlight_rect(self) -> Optional[QRectF]:
+        widget = self.spotlight_widget
+        if not is_widget_alive(widget) or self._spotlight_disabled:
+            return None
+        if not widget.isVisible() or widget.window() is not self.window():
+            return None
+        top_left = widget.mapTo(self, QPoint(0, 0))
+        rect = QRect(top_left, widget.size())
+        rect = rect.adjusted(-self._spotlight_padding, -self._spotlight_padding,
+                             self._spotlight_padding, self._spotlight_padding)
+        rect = rect.intersected(self.rect())
+        if rect.isNull() or rect.isEmpty():
+            return None
+        return QRectF(rect)
+
+    def paintEvent(self, event):
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            overlay_color = QColor(6, 10, 18, 210)
+            spotlight = self._spotlight_rect()
+            painter.fillRect(self.rect(), overlay_color)
+            if spotlight:
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(Qt.BrushStyle.SolidPattern)
+                painter.drawRoundedRect(spotlight, 16, 16)
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                painter.setPen(QPen(QColor(120, 190, 255, 230), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(spotlight, 16, 16)
+        except Exception:
+            self._spotlight_disabled = True
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), QColor(6, 10, 18, 210))
 
 class LogBox(QFrame):
     def __init__(self):
@@ -3379,15 +3440,19 @@ class BotFactoryApp(QMainWindow):
 
     def open_onboarding(self):
         steps = self._onboarding_steps()
+        nav_targets = [self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats, self.btn_manage, None]
+        spotlight_targets = [self.auto_page, self.bots_page, self.accounts_page, self.tokens_page, self.stats_page, self.manage_page, self.content_wrap]
+        step_defs: List[Dict[str, Optional[object]]] = []
+        for idx, (title, body) in enumerate(steps):
+            accent = nav_targets[idx] if idx < len(nav_targets) else None
+            spotlight = spotlight_targets[idx] if idx < len(spotlight_targets) else None
+            step_defs.append({"title": title, "body": body, "accent": accent, "spotlight": spotlight})
         def _sync_section(idx: int):
-            targets = [self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats, self.btn_manage]
-            if idx < len(targets):
+            if idx < 6:
                 self._nav(idx)
-                self.onboarding_overlay.set_target_widget(targets[idx])
-            else:
-                self.onboarding_overlay.set_target_widget(None)
+            self.onboarding_overlay.update()
         self.onboarding_overlay.on_step_changed = _sync_section
-        self.onboarding_overlay.set_steps(steps)
+        self.onboarding_overlay.set_steps(step_defs)
         self.onboarding_overlay.open_overlay()
         self.onboarding_overlay.raise_()
         _sync_section(0)
@@ -3652,19 +3717,19 @@ class BotFactoryApp(QMainWindow):
                 "settings_quick_tokens_csv": "Открыть tokens.csv",
                 "settings_quick_revoked": "Открыть revoke_tokens.txt",
                 "onb_auto_title": "Авто‑создание",
-                "onb_auto_body": "• Имена вводите через «/», например: name1/name2/name3.\n• Выберите хомяка — используйте если ботов нашел другой человек\n• Выберите картинку, которая будет назначена всем создаваемым ботам.\n• Нажмите «Запуск (Авто режим)».\n• Лимит ботов на аккаунт можно менять здесь же.",
+                "onb_auto_body": "• Поле имён принимает список через «/» — это быстрый способ создать несколько ботов за один запуск.\n• Блок «Хомяк» влияет на статистику дохода — выберите того, кому начисляется доля.\n• Картинка в этом разделе назначится всем новым ботам, поэтому проверьте предпросмотр.\n• Кнопка «Запуск (Авто режим)» стартует процесс и запускает очередь по аккаунтам.\n• Лимит «ботов на аккаунт» задаёт, сколько ботов сделает один аккаунт за круг; это помогает обходить лимиты.",
                 "onb_bots_title": "Боты",
-                "onb_bots_body": "• Здесь список созданных ботов.\n• Видно аккаунт, на котором создан бот, и дату создания.\n• Нажмите «Обновить», чтобы подтянуть свежие данные после запуска.",
+                "onb_bots_body": "• В таблице показаны все созданные боты: username, аккаунт‑создатель и дата.\n• Нажимайте строку, чтобы быстро скопировать нужные данные.\n• «Обновить» подтягивает новые записи сразу после создания.\n• Список помогает проверить, что бот создался и на каком аккаунте он находится.",
                 "onb_accounts_title": "Аккаунты",
-                "onb_accounts_body": "• Добавляйте аккаунты в формате phone:password:api_id:api_hash.\n• Используйте «Авторизовать все», чтобы проверить вход.\n• «Авторизовать ошибки» — только проблемные аккаунты.\n• Статусы показывают причину ошибок.",
+                "onb_accounts_body": "• Формат строки: phone:password:api_id:api_hash. Если 2FA нет — пароль ставьте UNKOWN.\n• «Авторизовать все» проверяет вход и создаёт сессии в папке sessions/.\n• «Авторизовать ошибки» полезно, когда нужно перезапустить только проблемные аккаунты.\n• Колонка статуса показывает причину, по которой аккаунт не участвует в создании ботов.",
                 "onb_tokens_title": "Токены",
-                "onb_tokens_body": "• Токены сгруппированы по датам.\n• Раскрывайте дату стрелкой, чтобы увидеть токены.\n• Копируйте выбранные группы, редактируйте и удаляйте записи.",
+                "onb_tokens_body": "• Токены группируются по датам — так проще находить свежие или старые партии.\n• Раскрывайте дату стрелкой, затем выделяйте нужные токены.\n• Доступны действия: копирование, редактирование и удаление выбранных строк.\n• Это ваш основной «склад» токенов для выдачи пользователям.",
                 "onb_stats_title": "Статистика",
-                "onb_stats_body": "• Создавайте хомяков с учетом их доли от заработка с ботов в процентах.\n• Просмотр кол-ва ботов по каждому хомяку.\n• Можно редактировать и удалять записи.",
+                "onb_stats_body": "• Здесь вы задаёте «хомяков» с процентами — это виртуальные роли для распределения статистики.\n• Таблица показывает общее количество ботов, относящихся к каждому хомяку.\n• Записи можно редактировать и удалять, если схема распределения изменилась.",
                 "onb_manage_title": "Удаление / Revoke",
-                "onb_manage_body": "• Выберите ботов в таблице.\n• Массовое удаление — удаляет всех выбранных ботов.\n• Единичное удаление — удаляет выбранного бота.\n• Revoke Token — получает новый токен и сохраняет в revoke_tokens.txt.",
+                "onb_manage_body": "• Раздел для обслуживания уже созданных ботов.\n• Массовое удаление удалит всех выделенных ботов одним запуском.\n• Единичное удаление подходит для точечной очистки.\n• Revoke Token создаёт новый токен у BotFather и сохраняет его в revoke_tokens.txt.",
                 "onb_final_title": "Финал",
-                "onb_final_body": "Поздравляю, теперь ты знаешь базовые функции этого приложения!🎉\n\ncreated by whynot"
+                "onb_final_body": "Готово! Теперь вы знаете ключевые функции приложения.\nЕсли захотите повторить — нажмите «Мастер новичка» в настройках.\n\ncreated by whynot"
             },
             "English": {
                 "nav_auto": "Auto creation",
@@ -3760,19 +3825,19 @@ class BotFactoryApp(QMainWindow):
                 "settings_quick_tokens_csv": "Open tokens.csv",
                 "settings_quick_revoked": "Open revoke_tokens.txt",
                 "onb_auto_title": "Auto creation",
-                "onb_auto_body": "• Enter names using “/”, e.g., name1/name2/name3.\n• Choose a hamster — use this if the bots were found by another person.\n• Choose an image that will be assigned to all created bots.\n• Click “Start (Auto mode)”.\n• Account bot limit can be changed here.",
+                "onb_auto_body": "• Enter names using “/” to queue multiple bots in one run.\n• The hamster selector impacts revenue stats — pick who should receive the share.\n• The image you choose here becomes the avatar for every new bot.\n• “Start (Auto mode)” launches the creation flow and cycles through accounts.\n• The per‑account limit controls how many bots one account creates per round.",
                 "onb_bots_title": "Bots",
-                "onb_bots_body": "• List of created bots.\n• Shows the account and creation date.\n• Click “Refresh” to sync new data.",
+                "onb_bots_body": "• This table lists every created bot with username, creator account, and date.\n• Click a row to quickly copy or verify details.\n• “Refresh” syncs new bots right after creation.\n• Use this view to confirm where a bot was created.",
                 "onb_accounts_title": "Accounts",
-                "onb_accounts_body": "• Add accounts as phone:password:api_id:api_hash.\n• Use “Authorize all” to check login.\n• “Authorize failed” checks only problematic accounts.\n• Statuses show error reasons.",
+                "onb_accounts_body": "• Format: phone:password:api_id:api_hash. Use UNKOWN if 2FA is not enabled.\n• “Authorize all” validates logins and creates sessions in sessions/.\n• “Authorize failed” retries only the accounts with errors.\n• Statuses explain why an account is unavailable.",
                 "onb_tokens_title": "Tokens",
-                "onb_tokens_body": "• Tokens are grouped by date.\n• Expand a date to see tokens.\n• Copy, edit, or delete groups.",
+                "onb_tokens_body": "• Tokens are grouped by date to keep batches organized.\n• Expand a date to see individual tokens.\n• You can copy, edit, or delete selected rows.\n• This is your main storage for distribution.",
                 "onb_stats_title": "Stats",
-                "onb_stats_body": "• Create hamsters with percentages.\n• See bot count per hamster.\n• You can edit or delete entries.",
+                "onb_stats_body": "• Define hamsters with percentages to track revenue distribution.\n• The table shows bot counts per hamster.\n• Edit or delete entries when your scheme changes.",
                 "onb_manage_title": "Delete / Revoke",
-                "onb_manage_body": "• Select bots in the table.\n• Mass delete removes all selected bots.\n• Single delete removes the selected bot.\n• Revoke token generates a new token and saves it to revoke_tokens.txt.",
+                "onb_manage_body": "• This section is for maintaining existing bots.\n• Mass delete removes all selected bots in one run.\n• Single delete is for precise cleanup.\n• Revoke Token generates a new BotFather token and saves it to revoke_tokens.txt.",
                 "onb_final_title": "Finish",
-                "onb_final_body": "Congrats, you now know the main features of this app!🎉\n\ncreated by whynot_repow"
+                "onb_final_body": "All set! You now know the key features.\nTo replay the tour, use “Onboarding wizard” in Settings.\n\ncreated by whynot_repow"
             }
         }
 
