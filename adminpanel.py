@@ -18,8 +18,32 @@ DB_PATH = Path(os.environ.get("ADMINPANEL_DB_PATH", BASE_DIR / "adminpanel.db"))
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 TOKEN_TTL_MINUTES = int(os.environ.get("ADMIN_TOKEN_TTL_MINUTES", "720"))
+ADMIN_ALLOWED_IPS = {
+    ip.strip()
+    for ip in os.environ.get("ADMIN_ALLOWED_IPS", "").split(",")
+    if ip.strip()
+}
 
 app = Flask(__name__)
+
+
+def _client_ip() -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or ""
+
+
+def _is_admin_ip_allowed() -> bool:
+    if not ADMIN_ALLOWED_IPS:
+        return True
+    return _client_ip() in ADMIN_ALLOWED_IPS
+
+
+@app.before_request
+def _restrict_admin_access():
+    if request.path.startswith("/admin") and not _is_admin_ip_allowed():
+        return jsonify({"error": "forbidden"}), 403
 
 
 def get_db() -> sqlite3.Connection:
