@@ -3,11 +3,14 @@ import sqlite3
 import secrets
 import hashlib
 import hmac
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request, g, render_template_string
+
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("ADMINPANEL_DB_PATH", BASE_DIR / "adminpanel.db"))
@@ -34,7 +37,14 @@ def close_db(exception=None):
 
 
 def _utc_now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _hash_password(password: str, salt: Optional[bytes] = None) -> str:
@@ -136,7 +146,7 @@ def require_admin() -> sqlite3.Row:
     ).fetchone()
     if row is None:
         return None
-    if datetime.fromisoformat(row["expires_at"]) < datetime.utcnow():
+    if _parse_utc(row["expires_at"]) < datetime.now(timezone.utc):
         return None
     return row
 
@@ -176,7 +186,9 @@ def admin_login():
         return jsonify({"error": "invalid_credentials"}), 401
     db.execute("UPDATE users SET last_login = ? WHERE id = ?", (_utc_now(), row["id"]))
     token = secrets.token_urlsafe(32)
-    expires_at = (datetime.utcnow() + timedelta(minutes=TOKEN_TTL_MINUTES)).isoformat(timespec="seconds")
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=TOKEN_TTL_MINUTES)).isoformat(
+        timespec="seconds"
+    )
     db.execute(
         "INSERT INTO admin_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         (token, row["id"], _utc_now(), expires_at),
@@ -196,7 +208,9 @@ def create_code():
     expires_in_days = payload.get("expires_in_days")
     expires_at = None
     if expires_in_days:
-        expires_at = (datetime.utcnow() + timedelta(days=int(expires_in_days))).isoformat(timespec="seconds")
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=int(expires_in_days))).isoformat(
+            timespec="seconds"
+        )
     db = get_db()
     db.execute(
         """
@@ -242,9 +256,9 @@ def extend_code(code_id: int):
     if row is None:
         return jsonify({"error": "not_found"}), 404
     if row["expires_at"]:
-        base = datetime.fromisoformat(row["expires_at"])
+        base = _parse_utc(row["expires_at"])
     else:
-        base = datetime.utcnow()
+        base = datetime.now(timezone.utc)
     new_exp = (base + timedelta(days=days)).isoformat(timespec="seconds")
     db.execute("UPDATE access_codes SET expires_at = ? WHERE id = ?", (new_exp, code_id))
     db.commit()
@@ -290,7 +304,7 @@ def client_redeem():
         return jsonify({"error": "invalid_code"}), 404
     if code_row["revoked_at"]:
         return jsonify({"error": "revoked"}), 403
-    if code_row["expires_at"] and datetime.fromisoformat(code_row["expires_at"]) < datetime.utcnow():
+    if code_row["expires_at"] and _parse_utc(code_row["expires_at"]) < datetime.now(timezone.utc):
         return jsonify({"error": "expired"}), 403
 
     machine = db.execute("SELECT * FROM machines WHERE fingerprint = ?", (fingerprint,)).fetchone()
@@ -342,7 +356,7 @@ def client_status():
         return jsonify({"error": "invalid_code"}), 404
     if code_row["revoked_at"]:
         return jsonify({"error": "revoked"}), 403
-    if code_row["expires_at"] and datetime.fromisoformat(code_row["expires_at"]) < datetime.utcnow():
+    if code_row["expires_at"] and _parse_utc(code_row["expires_at"]) < datetime.now(timezone.utc):
         return jsonify({"error": "expired"}), 403
 
     machine = db.execute("SELECT * FROM machines WHERE fingerprint = ?", (fingerprint,)).fetchone()
