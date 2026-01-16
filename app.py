@@ -6,10 +6,14 @@ import re
 import csv
 import json
 import asyncio
+import faulthandler
+import threading
 import time
+import traceback
 import zipfile
 import shutil
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
@@ -60,6 +64,8 @@ from telethon.tl.functions.messages import SendMessageRequest
 
 APP_NAME = "BotFactory"
 BYLINE = "by whynot"
+
+_CRASH_LOG_HANDLE = None
 
 BASE_DIR = Path(__file__).resolve().parent
 SESSIONS_DIR = BASE_DIR / "sessions"
@@ -311,6 +317,31 @@ def animate_button_press(btn: QWidget, duration: int = 160):
 
 def is_widget_alive(widget: Optional[QWidget]) -> bool:
     return widget is not None and isinstance(widget, QWidget) and not sip.isdeleted(widget)
+
+def install_crash_logger(log_path: Path):
+    global _CRASH_LOG_HANDLE
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if _CRASH_LOG_HANDLE is None or _CRASH_LOG_HANDLE.closed:
+        _CRASH_LOG_HANDLE = log_path.open("a", encoding="utf-8")
+    faulthandler.enable(file=_CRASH_LOG_HANDLE, all_threads=True)
+    def _write_log(prefix: str, exc_type, exc_value, exc_tb):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stack = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        _CRASH_LOG_HANDLE.write(f"[{ts}] {prefix}\n")
+        _CRASH_LOG_HANDLE.write(stack)
+        _CRASH_LOG_HANDLE.write("\n")
+        _CRASH_LOG_HANDLE.flush()
+
+    def _sys_excepthook(exc_type, exc_value, exc_tb):
+        _write_log("Unhandled exception", exc_type, exc_value, exc_tb)
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    def _thread_excepthook(args):
+        _write_log(f"Thread exception: {getattr(args, 'thread', None)}", args.exc_type, args.exc_value, args.exc_traceback)
+
+    sys.excepthook = _sys_excepthook
+    if hasattr(threading, "excepthook"):
+        threading.excepthook = _thread_excepthook
 
 def animate_evaporate_rect(parent: QWidget, rect: QRect, on_done=None):
     if parent is None or rect.isNull():
@@ -850,20 +881,17 @@ class OnboardingOverlay(QWidget):
         self.steps: List[Dict[str, Optional[object]]] = []
         self.step_index = 0
         self.on_step_changed = None
+        self.on_close = None
         self.accent_widget: Optional[QWidget] = None
         self.spotlight_widget: Optional[QWidget] = None
         self._last_accent: Optional[QWidget] = None
         self._spotlight_padding = 10
         self._spotlight_disabled = False
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 24, 24, 24)
-        lay.setSpacing(12)
-
-        lay.addStretch(1)
-        self.card = QFrame()
+        self._last_card_rect: Optional[QRect] = None
+        self.card = QFrame(self)
         self.card.setObjectName("OverlayCard")
         apply_shadow(self.card, blur=30, alpha=180, offset=QPointF(0, 8))
+        self.card.hide()
         card_lay = QVBoxLayout(self.card)
         card_lay.setContentsMargins(28, 24, 28, 24)
         card_lay.setSpacing(16)
@@ -871,15 +899,16 @@ class OnboardingOverlay(QWidget):
         self.title = QLabel("")
         self.title.setObjectName("OverlayTitle")
         self.title.setMinimumHeight(28)
-        self.text = QLabel("")
-        self.text.setWordWrap(True)
+        self.text = QTextBrowser()
         self.text.setObjectName("OverlayText")
         self.text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.text.setMinimumWidth(520)
-        self.text.setMinimumHeight(140)
-        self.text.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.text.setTextFormat(Qt.TextFormat.PlainText)
+        self.text.setMinimumHeight(180)
+        self.text.setFrameShape(QTextBrowser.Shape.NoFrame)
+        self.text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.text.setOpenExternalLinks(True)
 
         nav = QHBoxLayout()
         nav.setSpacing(12)
@@ -906,8 +935,7 @@ class OnboardingOverlay(QWidget):
         card_lay.addWidget(self.title)
         card_lay.addWidget(self.text)
         card_lay.addLayout(nav)
-        lay.addWidget(self.card, 0, Qt.AlignmentFlag.AlignCenter)
-        lay.addStretch(1)
+        self._card_anim: Optional[QPropertyAnimation] = None
 
     def set_targets(self, accent_widget: Optional[QWidget], spotlight_widget: Optional[QWidget] = None):
         if is_widget_alive(self._last_accent):
@@ -926,6 +954,7 @@ class OnboardingOverlay(QWidget):
             spotlight_widget = None
         self.spotlight_widget = spotlight_widget
         self.update()
+        self._reposition_card()
 
     def set_steps(self, steps: List[Dict[str, Optional[object]]]):
         self.steps = steps
@@ -946,8 +975,8 @@ class OnboardingOverlay(QWidget):
         except Exception:
             pass
         self.title.setText(title)
-        self.text.setText(body)
-        self.text.adjustSize()
+        self.text.setPlainText(body)
+        self.text.document().adjustSize()
         self.back.setEnabled(self.step_index > 0)
         self.next.setText("Готово" if self.step_index >= len(self.steps) - 1 else "Далее")
         animate_fade(self.text, 1.0, 1.0, 1)
@@ -961,6 +990,7 @@ class OnboardingOverlay(QWidget):
             except Exception:
                 self.set_targets(None, None)
         QTimer.singleShot(0, _apply_targets)
+        QTimer.singleShot(0, self._reposition_card)
 
     def next_step(self):
         if self.step_index >= len(self.steps) - 1:
@@ -979,7 +1009,10 @@ class OnboardingOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self.setGeometry(self.parentWidget().rect())
         self.show()
+        self.card.show()
+        self.card.raise_()
         animate_fade(self.card, 0.0, 1.0, 180)
+        self._reposition_card()
 
     def close_overlay(self):
         if is_widget_alive(self._last_accent):
@@ -988,11 +1021,96 @@ class OnboardingOverlay(QWidget):
             self._last_accent.style().polish(self._last_accent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.hide()
+        self.card.hide()
         self.move(0, 0)
         self.setGeometry(self.parentWidget().rect())
         self.spotlight_widget = None
         self._spotlight_disabled = False
         self.update()
+        if callable(self.on_close):
+            self.on_close()
+        self.step_index = 0
+
+    def _target_rect(self) -> Optional[QRect]:
+        candidate = self.spotlight_widget if is_widget_alive(self.spotlight_widget) else self.accent_widget
+        if not is_widget_alive(candidate):
+            return None
+        if not candidate.isVisible() or candidate.window() is not self.window():
+            return None
+        pos = QPoint(0, 0)
+        current = candidate
+        while current is not None and current is not self:
+            pos += current.pos()
+            current = current.parentWidget()
+        if current is not self:
+            return None
+        return QRect(pos, candidate.size())
+
+    def _intersection_area(self, rect: QRect, other: QRect) -> int:
+        inter = rect.intersected(other)
+        if inter.isNull() or inter.isEmpty():
+            return 0
+        return inter.width() * inter.height()
+
+    def _reposition_card(self):
+        card_size = self.card.sizeHint()
+        card_w = min(max(card_size.width(), 520), self.width() - 40)
+        card_h = min(max(card_size.height(), 260), self.height() - 40)
+        target = self._target_rect()
+        if target:
+            candidates = [
+                QRect(target.center().x() - card_w // 2, target.top() - card_h - 24, card_w, card_h),
+                QRect(target.center().x() - card_w // 2, target.bottom() + 24, card_w, card_h),
+                QRect(target.left() - card_w - 24, target.center().y() - card_h // 2, card_w, card_h),
+                QRect(target.right() + 24, target.center().y() - card_h // 2, card_w, card_h),
+                QRect(20, 20, card_w, card_h),
+                QRect(self.width() - card_w - 20, 20, card_w, card_h),
+                QRect(20, self.height() - card_h - 20, card_w, card_h),
+                QRect(self.width() - card_w - 20, self.height() - card_h - 20, card_w, card_h),
+            ]
+            best_rect = None
+            best_score = None
+            best_distance = None
+            for rect in candidates:
+                rect.moveLeft(min(max(rect.x(), 20), self.width() - card_w - 20))
+                rect.moveTop(min(max(rect.y(), 20), self.height() - card_h - 20))
+                score = self._intersection_area(rect, target)
+                distance = (rect.center() - target.center()).manhattanLength()
+                if best_score is None or score < best_score or (score == best_score and distance > best_distance):
+                    best_score = score
+                    best_distance = distance
+                    best_rect = QRect(rect)
+            end_rect = best_rect or QRect(
+                (self.width() - card_w) // 2,
+                (self.height() - card_h) // 2,
+                card_w,
+                card_h,
+            )
+        else:
+            end_rect = QRect(
+                (self.width() - card_w) // 2,
+                (self.height() - card_h) // 2,
+                card_w,
+                card_h,
+            )
+        if self._last_card_rect == end_rect:
+            return
+        self._last_card_rect = end_rect
+        if (self.card.geometry().center() - end_rect.center()).manhattanLength() < 8:
+            self.card.setGeometry(end_rect)
+            return
+        if self._card_anim is not None:
+            self._card_anim.stop()
+        self._card_anim = QPropertyAnimation(self.card, b"geometry", self)
+        self._card_anim.setStartValue(self.card.geometry())
+        self._card_anim.setEndValue(end_rect)
+        self._card_anim.setDuration(180)
+        self._card_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._card_anim.start()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_card()
 
     def _spotlight_rect(self) -> Optional[QRectF]:
         widget = self.spotlight_widget
@@ -1000,8 +1118,9 @@ class OnboardingOverlay(QWidget):
             return None
         if not widget.isVisible() or widget.window() is not self.window():
             return None
-        top_left = widget.mapTo(self, QPoint(0, 0))
-        rect = QRect(top_left, widget.size())
+        rect = self._target_rect()
+        if rect is None:
+            return None
         rect = rect.adjusted(-self._spotlight_padding, -self._spotlight_padding,
                              self._spotlight_padding, self._spotlight_padding)
         rect = rect.intersected(self.rect())
@@ -1015,16 +1134,39 @@ class OnboardingOverlay(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             overlay_color = QColor(6, 10, 18, 210)
             spotlight = self._spotlight_rect()
-            painter.fillRect(self.rect(), overlay_color)
+            path = QPainterPath()
+            path.addRect(QRectF(self.rect()))
             if spotlight:
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(Qt.BrushStyle.SolidPattern)
-                painter.drawRoundedRect(spotlight, 16, 16)
-                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                path.addRoundedRect(spotlight, 16, 16)
+                path.setFillRule(Qt.FillRule.OddEvenFill)
+            painter.fillPath(path, overlay_color)
+            if spotlight:
                 painter.setPen(QPen(QColor(120, 190, 255, 230), 2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRoundedRect(spotlight, 16, 16)
+                widget = self.spotlight_widget
+                if is_widget_alive(widget):
+                    pixmap = widget.grab()
+                    if not pixmap.isNull():
+                        zoom = pixmap.scaled(pixmap.width() * 1.3, pixmap.height() * 1.3,
+                                             Qt.AspectRatioMode.KeepAspectRatio,
+                                             Qt.TransformationMode.SmoothTransformation)
+                        lens_size = min(zoom.width(), zoom.height(), 140)
+                        lens = QRect(0, 0, lens_size, lens_size)
+                        lens.moveCenter(QPoint(0, 0))
+                        lens_pos = QPoint(int(spotlight.right() + 20), int(spotlight.center().y() - lens_size / 2))
+                        if lens_pos.x() + lens_size > self.width():
+                            lens_pos.setX(int(spotlight.left() - lens_size - 20))
+                        lens_pos.setY(max(20, min(lens_pos.y(), self.height() - lens_size - 20)))
+                        painter.save()
+                        clip = QPainterPath()
+                        clip.addEllipse(QRectF(lens_pos, QSize(lens_size, lens_size)))
+                        painter.setClipPath(clip)
+                        src_rect = QRect(0, 0, lens_size, lens_size)
+                        painter.drawPixmap(QRect(lens_pos, QSize(lens_size, lens_size)), zoom, src_rect)
+                        painter.restore()
+                        painter.setPen(QPen(QColor(120, 190, 255, 200), 2))
+                        painter.drawEllipse(QRect(lens_pos, QSize(lens_size, lens_size)))
         except Exception:
             self._spotlight_disabled = True
             painter = QPainter(self)
@@ -3200,6 +3342,10 @@ class BotFactoryApp(QMainWindow):
                 stop:1 rgba(0, 200, 255, 0.32));
             border: 1px solid rgba(120, 180, 255, 0.55);
         }
+        QFrame[onboarding="true"], QWidget[onboarding="true"] {
+            border: 2px solid rgba(120, 180, 255, 0.65);
+            border-radius: 18px;
+        }
 
         #PrimaryBtn {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -3439,35 +3585,57 @@ class BotFactoryApp(QMainWindow):
                 QTimer.singleShot(200, self.open_onboarding)
 
     def open_onboarding(self):
-        steps = self._onboarding_steps()
-        nav_targets = [self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats, self.btn_manage, None]
-        spotlight_targets = [self.auto_page, self.bots_page, self.accounts_page, self.tokens_page, self.stats_page, self.manage_page, self.content_wrap]
+        if getattr(self, "_onboarding_active", False):
+            return
+        self._onboarding_active = True
+        sections = self._onboarding_sections()
+        return_index = self.stack.currentIndex()
         step_defs: List[Dict[str, Optional[object]]] = []
-        for idx, (title, body) in enumerate(steps):
-            accent = nav_targets[idx] if idx < len(nav_targets) else None
-            spotlight = spotlight_targets[idx] if idx < len(spotlight_targets) else None
-            step_defs.append({"title": title, "body": body, "accent": accent, "spotlight": spotlight})
+        for idx, section in enumerate(sections):
+            step_defs.append({
+                "title": section["title"],
+                "body": section["body"],
+                "accent": section["page"],
+                "spotlight": section["spotlight"],
+                "section": idx,
+            })
         def _sync_section(idx: int):
-            if idx < 6:
-                self._nav(idx)
+            section_idx = step_defs[idx].get("section", 0) if step_defs else 0
+            if section_idx < 6:
+                self._nav(section_idx)
             self.onboarding_overlay.update()
         self.onboarding_overlay.on_step_changed = _sync_section
+        def _close():
+            self._nav(return_index)
+            self._onboarding_active = False
+        self.onboarding_overlay.on_close = _close
         self.onboarding_overlay.set_steps(step_defs)
         self.onboarding_overlay.open_overlay()
         self.onboarding_overlay.raise_()
         _sync_section(0)
 
-    def _onboarding_steps(self) -> List[Tuple[str, str]]:
+    def _onboarding_sections(self) -> List[Dict[str, object]]:
         t = self._translations().get(self.cfg.language, self._translations()["Русский"])
         return [
-            (t["onb_auto_title"], t["onb_auto_body"]),
-            (t["onb_bots_title"], t["onb_bots_body"]),
-            (t["onb_accounts_title"], t["onb_accounts_body"]),
-            (t["onb_tokens_title"], t["onb_tokens_body"]),
-            (t["onb_stats_title"], t["onb_stats_body"]),
-            (t["onb_manage_title"], t["onb_manage_body"]),
-            (t["onb_final_title"], t["onb_final_body"]),
+            {"title": t["onb_auto_title"], "body": t["onb_auto_body"], "page": self.auto_page,
+             "spotlight": self._section_spotlight(self.auto_page)},
+            {"title": t["onb_bots_title"], "body": t["onb_bots_body"], "page": self.bots_page,
+             "spotlight": self._section_spotlight(self.bots_page)},
+            {"title": t["onb_accounts_title"], "body": t["onb_accounts_body"], "page": self.accounts_page,
+             "spotlight": self._section_spotlight(self.accounts_page)},
+            {"title": t["onb_tokens_title"], "body": t["onb_tokens_body"], "page": self.tokens_page,
+             "spotlight": self._section_spotlight(self.tokens_page)},
+            {"title": t["onb_stats_title"], "body": t["onb_stats_body"], "page": self.stats_page,
+             "spotlight": self._section_spotlight(self.stats_page)},
+            {"title": t["onb_manage_title"], "body": t["onb_manage_body"], "page": self.manage_page,
+             "spotlight": self._section_spotlight(self.manage_page)},
+            {"title": t["onb_final_title"], "body": t["onb_final_body"], "page": self.content_wrap,
+             "spotlight": self._section_spotlight(self.content_wrap)},
         ]
+
+    def _section_spotlight(self, page: QWidget) -> QWidget:
+        label = page.findChild(QLabel, "PageTitle")
+        return label or page
 
     def resizeEvent(self, event):
         w = self.width()
@@ -3729,7 +3897,7 @@ class BotFactoryApp(QMainWindow):
                 "onb_manage_title": "Удаление / Revoke",
                 "onb_manage_body": "• Раздел для обслуживания уже созданных ботов.\n• Массовое удаление удалит всех выделенных ботов одним запуском.\n• Единичное удаление подходит для точечной очистки.\n• Revoke Token создаёт новый токен у BotFather и сохраняет его в revoke_tokens.txt.",
                 "onb_final_title": "Финал",
-                "onb_final_body": "Готово! Теперь вы знаете ключевые функции приложения.\nЕсли захотите повторить — нажмите «Мастер новичка» в настройках.\n\ncreated by whynot"
+                "onb_final_body": "Готово! Теперь вы знаете ключевые функции приложения.\nЕсли захотите повторить — нажмите «Мастер новичка» в настройках.\n\ncreated by whynot",
             },
             "English": {
                 "nav_auto": "Auto creation",
@@ -3837,7 +4005,7 @@ class BotFactoryApp(QMainWindow):
                 "onb_manage_title": "Delete / Revoke",
                 "onb_manage_body": "• This section is for maintaining existing bots.\n• Mass delete removes all selected bots in one run.\n• Single delete is for precise cleanup.\n• Revoke Token generates a new BotFather token and saves it to revoke_tokens.txt.",
                 "onb_final_title": "Finish",
-                "onb_final_body": "All set! You now know the key features.\nTo replay the tour, use “Onboarding wizard” in Settings.\n\ncreated by whynot_repow"
+                "onb_final_body": "All set! You now know the key features.\nTo replay the tour, use “Onboarding wizard” in Settings.\n\ncreated by whynot_repow",
             }
         }
 
@@ -4507,6 +4675,7 @@ class BotFactoryApp(QMainWindow):
             pass
 
 def main():
+    install_crash_logger(BASE_DIR / "onboarding_crash.log")
     if hasattr(Qt.ApplicationAttribute, "AA_UseHighDpiPixmaps"):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
     if hasattr(Qt.ApplicationAttribute, "AA_EnableHighDpiScaling"):
