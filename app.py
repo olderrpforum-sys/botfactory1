@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QLabel,
     QPushButton,
     QLineEdit,
@@ -33,6 +34,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QSpinBox,
     QCheckBox,
+    QRadioButton,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -47,7 +49,8 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QGraphicsOpacityEffect,
     QToolButton,
-    QMenu
+    QMenu,
+    QButtonGroup
 )
 
 from telethon import TelegramClient
@@ -86,7 +89,7 @@ def parse_accounts(path: Path) -> List[Dict]:
             continue
         accs.append({
             "phone": phone.strip(),
-            "password": None if pwd.strip().upper() == "UNKNOWN" else pwd.strip(),
+            "password": None if pwd.strip().upper() == "UNKOWN" else pwd.strip(),
             "api_id": parsed_api_id,
             "api_hash": api_hash.strip(),
         })
@@ -102,6 +105,74 @@ def safe_int(s: str, default: int = 0) -> int:
         return int(s)
     except:
         return default
+
+def translate_log_message(text: str, lang: str) -> str:
+    if lang != "English":
+        return text
+    patterns = [
+        (r"^\[RATE\] Ждём (\d+) сек\.\.\.$", r"[RATE] Waiting \1s..."),
+        (r"^\[WARN\] Нет запроса имени от BotFather\. \(Возможно лимит 20 ботов$", r"[WARN] No name request from BotFather. (Possibly 20-bot limit"),
+        (r"^\[WARN\] Нет запроса username от BotFather\. \(Возможно лимит 20 ботов$", r"[WARN] No username request from BotFather. (Possibly 20-bot limit"),
+        (r"^\[WARN\] Нет ответа BotFather — переходим к следующему username\.$", r"[WARN] No BotFather reply — moving to next username."),
+        (r"^\[WARN\] Картинка не выбрана — пропуск аватарки\.$", r"[WARN] No image selected — skipping avatar."),
+        (r"^\[WARN\] Нет запроса выбора бота для аватарки\.$", r"[WARN] No bot selection request for avatar."),
+        (r"^\[WARN\] Нет подтверждения выбора бота для аватарки\.$", r"[WARN] No confirmation for bot selection for avatar."),
+        (r"^\[WARN\] Invalid bot selected — повторяем выбор\.$", r"[WARN] Invalid bot selected — retrying selection."),
+        (r"^\[WARN\] Нет запроса на отправку фото\.$", r"[WARN] No request to send photo."),
+        (r"^\[WARN\] Нет подтверждения установки аватарки\. \(Возможно не успела загрузиться, проверьте вручную\)$", r"[WARN] No confirmation of avatar update. (It may not have uploaded yet, please check manually)"),
+        (r"^\[WARN\] Нет запроса выбора бота для удаления\.$", r"[WARN] No bot selection request for deletion."),
+        (r"^\[WARN\] Нет запроса выбора бота для revoke\.$", r"[WARN] No bot selection request for revoke."),
+        (r"^\[WARN\] Нет подтверждения revoke токена\.$", r"[WARN] No confirmation of revoke token."),
+        (r"^\[ERROR\] accounts_tg\.txt не найден или пуст\.$", r"[ERROR] accounts_tg.txt not found or empty."),
+        (r"^\[INFO\] Аккаунтов: (\d+) \| Имен: (\d+) \| Лимит/акк: (\d+) \(1 запуск = 1 круг\)$", r"[INFO] Accounts: \1 | Names: \2 | Limit/account: \3 (1 run = 1 round)"),
+        (r"^\[ERROR\] Нет доступных аккаунтов для создания\.$", r"[ERROR] No available accounts for creation."),
+        (r"^\[FREEZE\] ([^ ]+) заморожен на (\d+)s\. Переходим к следующему аккаунту, начинаю создание заново\.$", r"[FREEZE] \1 frozen for \2s. Moving to next account, restarting creation."),
+        (r"^\[WARN\] Не удалось создать бота — пробуем другим аккаунтом\.$", r"[WARN] Failed to create bot — trying another account."),
+        (r"^\[OK\] Создан @(.+)$", r"[OK] Created @\1"),
+        (r"^\[OK\] Токен сохранён\.$", r"[OK] Token saved."),
+        (r"^\[WARN\] Токен не найден \(Проверьте вручную\)\.$", r"[WARN] Token not found (check manually)."),
+        (r"^\[FREEZE\] FloodWait (\d+)s\. Акк заморожен, бот НЕ потерян\.$", r"[FREEZE] FloodWait \1s. Account frozen, bot NOT lost."),
+        (r"^\[RATE\] FloodWait (\d+)s\. Ждём\.$", r"[RATE] FloodWait \1s. Waiting."),
+        (r"^\[ERROR\] (.+)$", r"[ERROR] \1"),
+        (r"^\[OK\] Готово\.$", r"[OK] Done."),
+        (r"^\[ERROR\] Нет выбранных ботов для удаления\.$", r"[ERROR] No bots selected for deletion."),
+        (r"^\[WARN\] Пропуск: нет username или аккаунта\.$", r"[WARN] Skipping: no username or account."),
+        (r"^\[WARN\] Аккаунт (.+) не найден в accounts_tg\.txt\.$", r"[WARN] Account \1 not found in accounts_tg.txt."),
+        (r"^\[OK\] Удалён @(.+)$", r"[OK] Deleted @\1"),
+        (r"^\[ERROR\] Не удалось удалить @(.+)$", r"[ERROR] Failed to delete @\1"),
+        (r"^\[OK\] Удаление завершено\.$", r"[OK] Deletion completed."),
+        (r"^\[ERROR\] Нет выбранного бота для revoke\.$", r"[ERROR] No bot selected for revoke."),
+        (r"^\[OK\] Revoke токен для @(.+) сохранён\.$", r"[OK] Revoke token for @\1 saved."),
+        (r"^\[ERROR\] Не удалось выполнить revoke для @(.+)$", r"[ERROR] Failed to revoke for @\1"),
+        (r"^\[OK\] Revoke завершён\.$", r"[OK] Revoke completed."),
+        (r"^\[AUTH\] (.+)$", r"[AUTH] \1"),
+        (r"^\[INFO\] Массовое удаление: (\d+) ботов\.$", r"[INFO] Mass delete: \1 bots."),
+        (r"^\[INFO\] Единичное удаление: @(.+)\.$", r"[INFO] Single delete: @\1."),
+        (r"^\[INFO\] Revoke token: @(.+)\.$", r"[INFO] Revoke token: @\1."),
+        (r"^\[INFO\] Массовый revoke: (\d+) ботов\.$", r"[INFO] Mass revoke: \1 bots."),
+        (r"^\[INFO\] Авто-режим\. Хомяк: (.+)$", r"[INFO] Auto mode. Hamster: \1"),
+        (r"^\[INFO\] Stop запрошен\.$", r"[INFO] Stop requested."),
+        (r"^\[INFO\] Работаю\.\.\. \(heartbeat\)$", r"[INFO] Working... (heartbeat)"),
+        (r"^\[OK\] Картинка: (.+)$", r"[OK] Image: \1"),
+    ]
+    for pattern, repl in patterns:
+        if re.match(pattern, text):
+            return re.sub(pattern, repl, text)
+    return text
+
+def parse_usernames(raw: str) -> List[str]:
+    if not raw:
+        return []
+    parts = re.split(r"[\\s/]+", raw.strip())
+    seen = set()
+    result = []
+    for part in parts:
+        name = part.strip().lstrip("@")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
 
 def extract_try_again_seconds(text: str) -> Optional[int]:
     m = re.search(r"Please try again in (\d+) seconds", text, re.IGNORECASE)
@@ -131,7 +202,7 @@ def center_on_screen(w: QWidget):
     y = geo.y() + (geo.height() - w.height()) // 2
     w.move(x, y)
 
-def apply_shadow(widget: QWidget, blur: int = 24, alpha: int = 160, offset: QPointF = QPointF(0, 6)):
+def apply_shadow(widget: QWidget, blur: int = 26, alpha: int = 120, offset: QPointF = QPointF(0, 6)):
     shadow = QGraphicsDropShadowEffect(widget)
     shadow.setBlurRadius(blur)
     shadow.setColor(QColor(0, 0, 0, alpha))
@@ -197,6 +268,9 @@ def animate_fade(widget: QWidget, start: float = 0.0, end: float = 1.0, duration
     anim.setEndValue(end)
     anim.setDuration(duration)
     anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+    def _cleanup():
+        widget.setGraphicsEffect(None)
+    anim.finished.connect(_cleanup)
     anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 def animate_section_fade(widget: QWidget, duration: int = 220):
@@ -289,17 +363,23 @@ def animate_press(widget: QWidget, duration: int = 120, delta: int = 2):
 class ActionAnimator(QObject):
     def eventFilter(self, obj, event):
         if event.type() == event.Type.MouseButtonPress and isinstance(obj, (QPushButton, QToolButton)):
+            if isinstance(obj, QWidget) and obj.property("noPressAnim"):
+                return super().eventFilter(obj, event)
             animate_button_press(obj)
         return super().eventFilter(obj, event)
 
 def show_message(parent: QWidget, title: str, text: str):
+    if parent is not None and hasattr(parent, "translate_text"):
+        title = parent.translate_text(title)
+        text = parent.translate_text(text)
     dlg = StyledDialog(parent, title)
     dlg.resize(560, 240)
     label = QLabel(text)
     label.setWordWrap(True)
     label.setObjectName("Hint")
 
-    ok = QPushButton("ОК")
+    ok_label = parent.translate_text("ОК") if parent is not None and hasattr(parent, "translate_text") else "ОК"
+    ok = QPushButton(ok_label)
     ok.setObjectName("PrimaryBtn")
     ok.clicked.connect(dlg.accept)
 
@@ -314,6 +394,9 @@ def show_message(parent: QWidget, title: str, text: str):
     dlg.exec()
 
 def show_copy_dialog(parent: QWidget, title: str, text: str, copy_text: str):
+    if parent is not None and hasattr(parent, "translate_text"):
+        title = parent.translate_text(title)
+        text = parent.translate_text(text)
     dlg = StyledDialog(parent, title)
     dlg.resize(640, 360)
 
@@ -326,9 +409,11 @@ def show_copy_dialog(parent: QWidget, title: str, text: str, copy_text: str):
     box.setReadOnly(True)
     box.setPlainText(copy_text)
 
-    copy_btn = QPushButton("Скопировать")
+    copy_label = parent.translate_text("Скопировать") if parent is not None and hasattr(parent, "translate_text") else "Скопировать"
+    ok_label = parent.translate_text("ОК") if parent is not None and hasattr(parent, "translate_text") else "ОК"
+    copy_btn = QPushButton(copy_label)
     copy_btn.setObjectName("SecondaryBtn")
-    ok = QPushButton("ОК")
+    ok = QPushButton(ok_label)
     ok.setObjectName("PrimaryBtn")
 
     row = QHBoxLayout()
@@ -349,6 +434,11 @@ def show_copy_dialog(parent: QWidget, title: str, text: str, copy_text: str):
     dlg.exec()
 
 def show_input_dialog(parent: QWidget, title: str, prompt: str, placeholder: str = "", echo_mode: QLineEdit.EchoMode = QLineEdit.EchoMode.Normal) -> Optional[str]:
+    if parent is not None and hasattr(parent, "translate_text"):
+        title = parent.translate_text(title)
+        prompt = parent.translate_text(prompt)
+        if placeholder:
+            placeholder = parent.translate_text(placeholder)
     dlg = StyledDialog(parent, title)
     dlg.resize(560, 260)
 
@@ -361,8 +451,10 @@ def show_input_dialog(parent: QWidget, title: str, prompt: str, placeholder: str
     entry.setPlaceholderText(placeholder)
     entry.setEchoMode(echo_mode)
 
-    ok = QPushButton("ОК"); ok.setObjectName("PrimaryBtn")
-    cancel = QPushButton("Отмена"); cancel.setObjectName("SecondaryBtn")
+    ok_label = parent.translate_text("ОК") if parent is not None and hasattr(parent, "translate_text") else "ОК"
+    cancel_label = parent.translate_text("Отмена") if parent is not None and hasattr(parent, "translate_text") else "Отмена"
+    ok = QPushButton(ok_label); ok.setObjectName("PrimaryBtn")
+    cancel = QPushButton(cancel_label); cancel.setObjectName("SecondaryBtn")
 
     row = QHBoxLayout()
     row.addWidget(ok); row.addWidget(cancel); row.addStretch(1)
@@ -381,6 +473,11 @@ def show_input_dialog(parent: QWidget, title: str, prompt: str, placeholder: str
     return None
 
 def show_multiline_dialog(parent: QWidget, title: str, prompt: str, placeholder: str = "") -> Optional[str]:
+    if parent is not None and hasattr(parent, "translate_text"):
+        title = parent.translate_text(title)
+        prompt = parent.translate_text(prompt)
+        if placeholder:
+            placeholder = parent.translate_text(placeholder)
     dlg = StyledDialog(parent, title)
     dlg.resize(620, 360)
 
@@ -392,8 +489,10 @@ def show_multiline_dialog(parent: QWidget, title: str, prompt: str, placeholder:
     entry.setObjectName("Input")
     entry.setPlaceholderText(placeholder)
 
-    ok = QPushButton("ОК"); ok.setObjectName("PrimaryBtn")
-    cancel = QPushButton("Отмена"); cancel.setObjectName("SecondaryBtn")
+    ok_label = parent.translate_text("ОК") if parent is not None and hasattr(parent, "translate_text") else "ОК"
+    cancel_label = parent.translate_text("Отмена") if parent is not None and hasattr(parent, "translate_text") else "Отмена"
+    ok = QPushButton(ok_label); ok.setObjectName("PrimaryBtn")
+    cancel = QPushButton(cancel_label); cancel.setObjectName("SecondaryBtn")
 
     row = QHBoxLayout()
     row.addWidget(ok); row.addWidget(cancel); row.addStretch(1)
@@ -936,7 +1035,6 @@ class LogBox(QFrame):
         self.text.appendPlainText(s)
         sb = self.text.verticalScrollBar()
         sb.setValue(sb.maximum())
-        animate_fade(self.text, 0.85, 1.0, 180)
 
 class Worker(QThread):
 
@@ -1608,7 +1706,7 @@ class AutoPage(QWidget):
 
         card = QFrame(); card.setObjectName("Card")
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+        c = QVBoxLayout(card); c.setContentsMargins(14,14,14,14); c.setSpacing(10)
 
         self.title = QLabel("Автоматическое создание"); self.title.setObjectName("PageTitle")
         c.addWidget(self.title)
@@ -1627,7 +1725,7 @@ class AutoPage(QWidget):
 
         form = QFormLayout()
         form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(6)
+        form.setVerticalSpacing(12)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         self.lbl_chat = QLabel("Чат:")
@@ -1637,6 +1735,7 @@ class AutoPage(QWidget):
         form.addRow(self.lbl_names, self.names)
         form.addRow(self.lbl_hamster, self.hamster)
 
+        self.file_label = QLabel("Файлы"); self.file_label.setObjectName("SectionTitle")
         row = QHBoxLayout()
         self.pick_img = QPushButton("Выбрать аватарку (обязательно)"); self.pick_img.setObjectName("PrimaryBtn")
         self.pick_img.clicked.connect(self.ui.pick_image)
@@ -1654,6 +1753,7 @@ class AutoPage(QWidget):
         limit_row.addStretch(1)
         limit_row.addWidget(self.limit_edit)
 
+        self.run_label = QLabel("Запуск"); self.run_label.setObjectName("SectionTitle")
         btn_row = QHBoxLayout()
         self.custom = QPushButton("Кастомизация"); self.custom.setObjectName("SecondaryBtn")
         self.edit = QPushButton("Изменить"); self.edit.setObjectName("SecondaryBtn")
@@ -1668,9 +1768,12 @@ class AutoPage(QWidget):
         btn_row.addWidget(self.custom); btn_row.addWidget(self.edit); btn_row.addWidget(self.start); btn_row.addWidget(self.stop); btn_row.addStretch(1)
 
         c.addLayout(form)
+        c.addSpacing(6)
+        c.addWidget(self.file_label)
         c.addLayout(row)
         self.update_limit_hint()
         c.addLayout(limit_row)
+        c.addWidget(self.run_label)
         c.addLayout(btn_row)
 
         lay.addWidget(card)
@@ -1692,12 +1795,14 @@ class AutoPage(QWidget):
         self.edit.setText(t["auto_edit"])
         self.start.setText(t["auto_start"])
         self.stop.setText(t["auto_stop"])
+        self.file_label.setText(t["section_files"])
+        self.run_label.setText(t["section_run"])
 
     def change_limit(self):
-        dlg = StyledDialog(self, "Лимит ботов")
+        dlg = StyledDialog(self, self.ui.translate_text("Лимит ботов"))
         dlg.resize(520, 260)
 
-        label = QLabel("Сколько ботов можно создать на аккаунт за запуск?")
+        label = QLabel(self.ui.translate_text("Сколько ботов можно создать на аккаунт за запуск?"))
         label.setWordWrap(True)
         label.setObjectName("Hint")
 
@@ -1707,8 +1812,8 @@ class AutoPage(QWidget):
         spin.setObjectName("Input")
 
         row = QHBoxLayout()
-        ok = QPushButton("ОК"); ok.setObjectName("PrimaryBtn")
-        cancel = QPushButton("Отмена"); cancel.setObjectName("SecondaryBtn")
+        ok = QPushButton(self.ui.translate_text("ОК")); ok.setObjectName("PrimaryBtn")
+        cancel = QPushButton(self.ui.translate_text("Отмена")); cancel.setObjectName("SecondaryBtn")
         row.addWidget(ok); row.addWidget(cancel); row.addStretch(1)
 
         body = QVBoxLayout()
@@ -1733,7 +1838,7 @@ class BotsPage(QWidget):
 
         card = QFrame(); card.setObjectName("Card")
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+        c = QVBoxLayout(card); c.setContentsMargins(14,14,14,14); c.setSpacing(10)
 
         self.title = QLabel("Боты"); self.title.setObjectName("PageTitle")
         self.hint = QLabel("Список ботов и аккаунтов, на которых они созданы."); self.hint.setObjectName("Hint")
@@ -1772,6 +1877,8 @@ class BotsPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         c.addWidget(self.table)
 
+        self.actions_label = QLabel("Действия"); self.actions_label.setObjectName("SectionTitle")
+        c.addWidget(self.actions_label)
         btn_row = QHBoxLayout()
         self.refresh = QPushButton("Обновить"); self.refresh.setObjectName("PrimaryBtn")
         self.refresh.clicked.connect(self.refresh_table)
@@ -1785,6 +1892,8 @@ class BotsPage(QWidget):
         self.title.setText(t["bots_title"])
         self.hint.setText(t["bots_hint"])
         self.refresh.setText(t["bots_refresh"])
+        self.actions_label.setText(t["section_actions"])
+        self.table.setHorizontalHeaderLabels([t["bots_table_bot"], t["bots_table_account"], t["bots_table_created"]])
 
     def refresh_table(self):
         rows = []
@@ -1823,10 +1932,10 @@ class ManageBotsPage(QWidget):
 
         card = QFrame(); card.setObjectName("Card")
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+        c = QVBoxLayout(card); c.setContentsMargins(14,14,14,14); c.setSpacing(10)
 
         self.title = QLabel("Удаление и Revoke Token"); self.title.setObjectName("PageTitle")
-        self.hint = QLabel("Выберите ботов в таблице для массового удаления или revoke токена."); self.hint.setObjectName("Hint")
+        self.hint = QLabel("Выберите ботов в таблице или введите usernames для массового удаления или revoke токена."); self.hint.setObjectName("Hint")
         c.addWidget(self.title)
         c.addWidget(self.hint)
 
@@ -1840,17 +1949,26 @@ class ManageBotsPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         c.addWidget(self.table)
 
-        btn_row = QHBoxLayout()
+        self.section_data = QLabel("Список"); self.section_data.setObjectName("SectionTitle")
+        c.addWidget(self.section_data)
+        data_row = QHBoxLayout()
         self.refresh = QPushButton("Обновить список"); self.refresh.setObjectName("SecondaryBtn")
+        data_row.addWidget(self.refresh)
+        data_row.addStretch(1)
+        c.addLayout(data_row)
+
+        self.section_delete = QLabel("Удаление"); self.section_delete.setObjectName("SectionTitle")
+        c.addWidget(self.section_delete)
+        btn_row = QHBoxLayout()
         self.delete_mass = QPushButton("Массовое удаление"); self.delete_mass.setObjectName("PrimaryBtn")
         self.delete_single = QPushButton("Единичное удаление"); self.delete_single.setObjectName("SecondaryBtn")
-        btn_row.addWidget(self.refresh)
-        btn_row.addSpacing(12)
         btn_row.addWidget(self.delete_mass)
         btn_row.addWidget(self.delete_single)
         btn_row.addStretch(1)
         c.addLayout(btn_row)
 
+        self.section_revoke = QLabel("Revoke"); self.section_revoke.setObjectName("SectionTitle")
+        c.addWidget(self.section_revoke)
         revoke_row = QHBoxLayout()
         self.revoke_mass = QPushButton("Массовый Revoke"); self.revoke_mass.setObjectName("PrimaryBtn")
         self.revoke = QPushButton("Revoke Token"); self.revoke.setObjectName("SecondaryBtn")
@@ -1914,6 +2032,10 @@ class ManageBotsPage(QWidget):
         self.revoke_mass.setText(t["manage_revoke_mass"])
         self.revoke.setText(t["manage_revoke_single"])
         self.open_revoked.setText(t["manage_open_revoked"])
+        self.section_data.setText(t["section_list"])
+        self.section_delete.setText(t["section_delete"])
+        self.section_revoke.setText(t["section_revoke"])
+        self.table.setHorizontalHeaderLabels([t["manage_table_bot"], t["manage_table_account"]])
 
 class SettingsPage(QWidget):
     def __init__(self, ui):
@@ -1923,7 +2045,7 @@ class SettingsPage(QWidget):
 
         card = QFrame(); card.setObjectName("Card")
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+        c = QVBoxLayout(card); c.setContentsMargins(14,14,14,14); c.setSpacing(10)
 
         self.title = QLabel("Настройки"); self.title.setObjectName("PageTitle")
         self.hint = QLabel(""); self.hint.setObjectName("Hint")
@@ -1931,8 +2053,8 @@ class SettingsPage(QWidget):
         c.addWidget(self.hint)
 
         form = QFormLayout()
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(8)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(6)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -1947,14 +2069,19 @@ class SettingsPage(QWidget):
 
         c.addLayout(form)
 
-        btn_row = QHBoxLayout()
+        btn_row = QGridLayout()
         self.backup_btn = QPushButton("Создать резервную копию"); self.backup_btn.setObjectName("PrimaryBtn")
         self.restore_btn = QPushButton("Импорт резервной копии"); self.restore_btn.setObjectName("SecondaryBtn")
         self.reset_btn = QPushButton("Сброс до заводских настроек"); self.reset_btn.setObjectName("SecondaryBtn")
-        btn_row.addWidget(self.backup_btn)
-        btn_row.addWidget(self.restore_btn)
-        btn_row.addWidget(self.reset_btn)
-        btn_row.addStretch(1)
+        for btn in (self.backup_btn, self.restore_btn, self.reset_btn):
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        btn_row.addWidget(self.backup_btn, 0, 0)
+        btn_row.addWidget(self.restore_btn, 0, 1)
+        btn_row.addWidget(self.reset_btn, 1, 0, 1, 2)
+        btn_row.setHorizontalSpacing(10)
+        btn_row.setVerticalSpacing(8)
+        btn_row.setColumnStretch(0, 1)
+        btn_row.setColumnStretch(1, 1)
         c.addLayout(btn_row)
 
         help_row = QHBoxLayout()
@@ -1965,6 +2092,36 @@ class SettingsPage(QWidget):
         help_row.addStretch(1)
         c.addLayout(help_row)
 
+        info_card = QFrame(); info_card.setObjectName("InfoCard")
+        info_layout = QVBoxLayout(info_card); info_layout.setContentsMargins(12, 12, 12, 12); info_layout.setSpacing(6)
+        self.info_title = QLabel("Полезное"); self.info_title.setObjectName("SectionTitle")
+        self.info_paths = QLabel(""); self.info_paths.setObjectName("InfoLabel")
+        self.info_paths.setWordWrap(True)
+        self.info_tip = QLabel("Подсказка: для быстрых операций можно вставлять имена через «/»."); self.info_tip.setObjectName("InfoLabel")
+        self.info_tip.setWordWrap(True)
+        info_layout.addWidget(self.info_title)
+        info_layout.addWidget(self.info_paths)
+        info_layout.addWidget(self.info_tip)
+        c.addWidget(info_card)
+
+        quick_card = QFrame(); quick_card.setObjectName("InfoCard")
+        quick_layout = QVBoxLayout(quick_card); quick_layout.setContentsMargins(12, 12, 12, 12); quick_layout.setSpacing(8)
+        self.quick_title = QLabel("Быстрые действия"); self.quick_title.setObjectName("SectionTitle")
+        quick_buttons = QGridLayout()
+        self.quick_tokens = QPushButton("Открыть tokens.txt"); self.quick_tokens.setObjectName("SecondaryBtn")
+        self.quick_tokens_csv = QPushButton("Открыть tokens.csv"); self.quick_tokens_csv.setObjectName("SecondaryBtn")
+        self.quick_revoked = QPushButton("Открыть revoke_tokens.txt"); self.quick_revoked.setObjectName("SecondaryBtn")
+        quick_buttons.addWidget(self.quick_tokens, 0, 0)
+        quick_buttons.addWidget(self.quick_tokens_csv, 0, 1)
+        quick_buttons.addWidget(self.quick_revoked, 1, 0, 1, 2)
+        quick_buttons.setHorizontalSpacing(10)
+        quick_buttons.setVerticalSpacing(8)
+        quick_buttons.setColumnStretch(0, 1)
+        quick_buttons.setColumnStretch(1, 1)
+        quick_layout.addWidget(self.quick_title)
+        quick_layout.addLayout(quick_buttons)
+        c.addWidget(quick_card)
+
         lay.addWidget(card)
 
         self.lang_combo.currentTextChanged.connect(self.ui.set_language)
@@ -1974,6 +2131,9 @@ class SettingsPage(QWidget):
         self.reset_btn.clicked.connect(self.ui.reset_factory)
         self.onboarding_btn.clicked.connect(self.ui.open_onboarding)
         self.support_btn.clicked.connect(self.ui.open_support)
+        self.quick_tokens.clicked.connect(self.ui.open_tokens_txt)
+        self.quick_tokens_csv.clicked.connect(self.ui.open_tokens_csv)
+        self.quick_revoked.clicked.connect(self.ui.open_revoked_tokens_txt)
 
         self.refresh_state()
 
@@ -1983,6 +2143,13 @@ class SettingsPage(QWidget):
         if idx >= 0:
             self.lang_combo.setCurrentIndex(idx)
         self.autostart_toggle.setChecked(self.ui.is_autostart_enabled())
+        self.info_paths.setText(
+            "Файлы:\n"
+            f"• accounts_tg.txt — {ACCOUNTS_FILE}\n"
+            f"• tokens.csv — {self.ui.cfg.tokens_csv_path()}\n"
+            f"• revoke_tokens.txt — {self.ui.cfg.revoked_tokens_txt_path()}\n"
+            f"• sessions/ — {SESSIONS_DIR}"
+        )
 
     def update_language(self, t: Dict[str, str]):
         self.title.setText(t["settings_title"])
@@ -1995,6 +2162,12 @@ class SettingsPage(QWidget):
         self.reset_btn.setText(t["settings_reset"])
         self.onboarding_btn.setText(t["settings_onboarding"])
         self.support_btn.setText(t["settings_support"])
+        self.info_title.setText(t["settings_info_title"])
+        self.info_tip.setText(t["settings_info_tip"])
+        self.quick_title.setText(t["settings_quick_actions"])
+        self.quick_tokens.setText(t["settings_quick_tokens"])
+        self.quick_tokens_csv.setText(t["settings_quick_tokens_csv"])
+        self.quick_revoked.setText(t["settings_quick_revoked"])
 
 class TokensPage(QWidget):
     def __init__(self, ui):
@@ -2005,7 +2178,7 @@ class TokensPage(QWidget):
 
         card = QFrame(); card.setObjectName("Card")
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+        c = QVBoxLayout(card); c.setContentsMargins(14,14,14,14); c.setSpacing(10)
 
         self.title = QLabel("Токены"); self.title.setObjectName("PageTitle")
         self.hint = QLabel("Токены сгруппированы по датам. Можно копировать, редактировать и удалять."); self.hint.setObjectName("Hint")
@@ -2054,6 +2227,7 @@ class TokensPage(QWidget):
 
         c.addLayout(body)
 
+        self.actions_label = QLabel("Действия"); self.actions_label.setObjectName("SectionTitle")
         btn_row = QVBoxLayout()
         row1 = QHBoxLayout()
         row2 = QHBoxLayout()
@@ -2081,6 +2255,7 @@ class TokensPage(QWidget):
         row2.addStretch(1)
         btn_row.addLayout(row1)
         btn_row.addLayout(row2)
+        c.addWidget(self.actions_label)
         c.addLayout(btn_row)
 
         lay.addWidget(card)
@@ -2096,6 +2271,12 @@ class TokensPage(QWidget):
         self.copy_latest.setText(t["tokens_copy_latest"])
         self.delete_selected.setText(t["tokens_delete_selected"])
         self.clear_all.setText(t["tokens_clear"])
+        self.actions_label.setText(t["section_actions"])
+        self.tree.setHeaderLabels([t["tokens_table_date"], t["tokens_table_bot"]])
+        if self.current_date:
+            self.date_label.setText(f"{t['tokens_date_label']}: {self.current_date}")
+        else:
+            self.date_label.setText(f"{t['tokens_date_label']}: —")
 
     def _load_rows(self) -> List[Dict]:
         rows = []
@@ -2162,7 +2343,8 @@ class TokensPage(QWidget):
 
         self.editor.clear()
         self.current_date = None
-        self.date_label.setText("Дата: —")
+        t = self.ui._translations().get(self.ui.cfg.language, self.ui._translations()["Русский"])
+        self.date_label.setText(f"{t['tokens_date_label']}: —")
 
     def _on_select(self):
         items = self.tree.selectedItems()
@@ -2175,7 +2357,8 @@ class TokensPage(QWidget):
         if not date_key:
             return
         self.current_date = date_key
-        self.date_label.setText(f"Дата: {date_key}")
+        t = self.ui._translations().get(self.ui.cfg.language, self.ui._translations()["Русский"])
+        self.date_label.setText(f"{t['tokens_date_label']}: {date_key}")
         tokens = []
         for i in range(item.childCount()):
             token = item.child(i).text(0).strip()
@@ -2349,7 +2532,7 @@ class AccountsPage(QWidget):
 
         card = QFrame(); card.setObjectName("Card")
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+        c = QVBoxLayout(card); c.setContentsMargins(14,14,14,14); c.setSpacing(10)
 
         self.title = QLabel("Аккаунты"); self.title.setObjectName("PageTitle")
         self.hint = QLabel(""); self.hint.setObjectName("Hint")
@@ -2386,19 +2569,27 @@ class AccountsPage(QWidget):
         self.table.setCornerButtonEnabled(False)
         c.addWidget(self.table)
 
-        btn_row = QHBoxLayout()
+        self.manage_label = QLabel("Управление"); self.manage_label.setObjectName("SectionTitle")
+        c.addWidget(self.manage_label)
+        manage_row = QHBoxLayout()
         self.add_btn = QPushButton("Добавить аккаунты"); self.add_btn.setObjectName("SecondaryBtn")
         self.delete_btn = QPushButton("Удалить аккаунт"); self.delete_btn.setObjectName("SecondaryBtn")
+        self.refresh = QPushButton("Обновить"); self.refresh.setObjectName("SecondaryBtn")
+        manage_row.addWidget(self.add_btn)
+        manage_row.addWidget(self.delete_btn)
+        manage_row.addWidget(self.refresh)
+        manage_row.addStretch(1)
+        c.addLayout(manage_row)
+
+        self.auth_label = QLabel("Авторизация"); self.auth_label.setObjectName("SectionTitle")
+        c.addWidget(self.auth_label)
+        auth_row = QHBoxLayout()
         self.auth_all = QPushButton("Авторизовать все"); self.auth_all.setObjectName("PrimaryBtn")
         self.auth_failed = QPushButton("Авторизовать ошибки"); self.auth_failed.setObjectName("SecondaryBtn")
-        self.refresh = QPushButton("Обновить"); self.refresh.setObjectName("SecondaryBtn")
-        btn_row.addWidget(self.add_btn)
-        btn_row.addWidget(self.delete_btn)
-        btn_row.addWidget(self.auth_all)
-        btn_row.addWidget(self.auth_failed)
-        btn_row.addWidget(self.refresh)
-        btn_row.addStretch(1)
-        c.addLayout(btn_row)
+        auth_row.addWidget(self.auth_all)
+        auth_row.addWidget(self.auth_failed)
+        auth_row.addStretch(1)
+        c.addLayout(auth_row)
 
         self.add_btn.clicked.connect(self.add_accounts)
         self.delete_btn.clicked.connect(self.delete_account)
@@ -2417,6 +2608,9 @@ class AccountsPage(QWidget):
         self.auth_all.setText(t["accounts_auth_all"])
         self.auth_failed.setText(t["accounts_auth_failed"])
         self.refresh.setText(t["accounts_refresh"])
+        self.manage_label.setText(t["section_manage"])
+        self.auth_label.setText(t["section_auth"])
+        self.table.setHorizontalHeaderLabels([t["accounts_table_phone"], t["accounts_table_status"], t["accounts_table_reason"]])
 
     def refresh_table(self):
         accounts = parse_accounts(ACCOUNTS_FILE)
@@ -2507,7 +2701,7 @@ class StatsPage(QWidget):
 
         card = QFrame(); card.setObjectName("Card")
         apply_shadow(card, blur=28, alpha=150, offset=QPointF(0, 8))
-        c = QVBoxLayout(card); c.setContentsMargins(18,18,18,18); c.setSpacing(12)
+        c = QVBoxLayout(card); c.setContentsMargins(14,14,14,14); c.setSpacing(10)
 
         self.title = QLabel("Статистика"); self.title.setObjectName("PageTitle")
         c.addWidget(self.title)
@@ -2563,6 +2757,8 @@ class StatsPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         c.addWidget(self.table)
 
+        self.actions_label = QLabel("Действия"); self.actions_label.setObjectName("SectionTitle")
+        c.addWidget(self.actions_label)
         btn_row = QHBoxLayout()
         self.edit = QPushButton("Редактировать"); self.edit.setObjectName("SecondaryBtn")
         self.delete = QPushButton("Удалить выбранный"); self.delete.setObjectName("SecondaryBtn")
@@ -2586,6 +2782,8 @@ class StatsPage(QWidget):
         self.edit.setText(t["stats_edit"])
         self.delete.setText(t["stats_delete"])
         self.refresh.setText(t["stats_refresh"])
+        self.actions_label.setText(t["section_actions"])
+        self.table.setHorizontalHeaderLabels([t["stats_table_hamster"], t["stats_table_percent"], t["stats_table_bots"]])
 
     def add_hamster(self):
         name = self.name.text().strip()
@@ -2626,7 +2824,7 @@ class StatsPage(QWidget):
         name = self.table.item(r,0).text()
         percent = safe_int(self.table.item(r,1).text(), 50)
 
-        dlg = StyledDialog(self, "Редактировать хомяка")
+        dlg = StyledDialog(self, self.ui.translate_text("Редактировать хомяка"))
         dlg.resize(720, 320)
 
         def _lbl(t: str) -> QLabel:
@@ -2644,13 +2842,13 @@ class StatsPage(QWidget):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         wname = QLineEdit(name); wname.setObjectName("Input")
         wperc = QSpinBox(); wperc.setRange(0,100); wperc.setValue(percent); wperc.setObjectName("Input")
-        form.addRow("Название:", wname)
-        form.addRow("Процент:", wperc)
+        form.addRow(self.ui.translate_text("Название:"), wname)
+        form.addRow(self.ui.translate_text("Процент:"), wperc)
         dlg.body.addLayout(form)
 
         row = QHBoxLayout()
-        ok = QPushButton("Сохранить"); ok.setObjectName("PrimaryBtn")
-        cancel = QPushButton("Отмена"); cancel.setObjectName("SecondaryBtn")
+        ok = QPushButton(self.ui.translate_text("Сохранить")); ok.setObjectName("PrimaryBtn")
+        cancel = QPushButton(self.ui.translate_text("Отмена")); cancel.setObjectName("SecondaryBtn")
         row.addWidget(ok); row.addWidget(cancel); row.addStretch(1)
         dlg.body.addLayout(row)
 
@@ -2697,6 +2895,7 @@ class BotFactoryApp(QMainWindow):
         else:
             self.resize(1220, 740)
         self.setMinimumSize(980, 640)
+        self._compact_state: Optional[bool] = None
 
         self.cfg = AutoConfig(**load_json(CONFIG_FILE, asdict(AutoConfig())))
         # Ensure tokens output files exist on startup
@@ -2742,6 +2941,12 @@ class BotFactoryApp(QMainWindow):
         self.btn_stats = QPushButton("Статистика"); self.btn_stats.setObjectName("NavBtn")
         self.btn_manage = QPushButton("Удаление / Revoke"); self.btn_manage.setObjectName("NavBtn")
         self.btn_settings = QPushButton("Настройки"); self.btn_settings.setObjectName("NavBtn")
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        for btn in (self.btn_auto, self.btn_bots, self.btn_accounts, self.btn_tokens, self.btn_stats, self.btn_manage, self.btn_settings):
+            btn.setCheckable(True)
+            btn.setProperty("noPressAnim", True)
+            self.nav_group.addButton(btn)
 
         side.addWidget(self.btn_auto); side.addWidget(self.btn_bots); side.addWidget(self.btn_accounts); side.addWidget(self.btn_tokens); side.addWidget(self.btn_stats); side.addWidget(self.btn_manage)
         side.addStretch(1)
@@ -2791,6 +2996,7 @@ class BotFactoryApp(QMainWindow):
         self.bridge.request_password.connect(self._ask_password)
 
         self.setStyleSheet(self._style())
+        self._init_compact_state()
         self.animator = ActionAnimator(self)
         QApplication.instance().installEventFilter(self.animator)
         self.onboarding_overlay = OnboardingOverlay(self)
@@ -2802,8 +3008,8 @@ class BotFactoryApp(QMainWindow):
 
     def _style(self) -> str:
         return """
-        * { font-family: "Segoe UI Variable Text", "Segoe UI", "Arial"; }
-        QLabel { color: rgba(230,237,243,0.92); font-weight: 700; margin-bottom: 2px; }
+        * { font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", "Arial"; }
+        QLabel { color: rgba(232,236,244,0.92); font-weight: 600; margin-bottom: 2px; }
         QCheckBox { color: rgba(230,237,243,0.92); font-weight: 700; spacing: 10px; }
         QCheckBox::indicator {
             width: 18px; height: 18px;
@@ -2817,10 +3023,10 @@ class BotFactoryApp(QMainWindow):
         }
 
         QMainWindow { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
-            stop:0 rgba(6,10,20,255),
-            stop:0.5 rgba(8,14,26,255),
-            stop:1 rgba(10,18,32,255)); }
-        #PremiumTitleBar { background: rgba(8, 12, 22, 0.98); border-bottom: 1px solid rgba(255,255,255,0.08); }
+            stop:0 rgba(8,12,22,255),
+            stop:0.5 rgba(10,16,28,255),
+            stop:1 rgba(12,20,34,255)); }
+        #PremiumTitleBar { background: rgba(10, 14, 24, 0.98); border-bottom: 1px solid rgba(255,255,255,0.06); }
         #TitleBarText { color: rgba(230,237,243,0.90); font-weight: 900; font-size: 14px; }
         QPushButton#WinBtn, QPushButton#WinClose {
             background: rgba(255,255,255,0.04);
@@ -2832,9 +3038,9 @@ class BotFactoryApp(QMainWindow):
 
         #Sidebar {
             background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                stop:0 rgba(12,18,34,0.98),
-                stop:1 rgba(9,13,24,0.96));
-            border: 1px solid rgba(255,255,255,0.08);
+                stop:0 rgba(14,20,36,0.98),
+                stop:1 rgba(10,14,26,0.96));
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 24px;
         }
         #BrandTitle { color: rgba(236,242,250,0.98); font-weight: 800; font-size: 24px; letter-spacing: 0.2px; }
@@ -2842,18 +3048,25 @@ class BotFactoryApp(QMainWindow):
         #Footer { color: rgba(230,237,243,0.60); font-size: 11px; font-weight: 600; }
 
         #ContentWrap {
-            background: rgba(12,18,34,0.98);
-            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(12,18,34,0.96);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 24px;
         }
 
         #Card {
-            background: rgba(12,18,34,0.98);
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 24px;
+            background: rgba(12,18,34,0.92);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 22px;
         }
-        #PageTitle { color: rgba(236,242,250,0.98); font-size: 21px; font-weight: 800; }
-        #Hint { color: rgba(230,237,243,0.70); font-size: 12px; font-weight: 600; }
+        #InfoCard {
+            background: rgba(10,16,30,0.85);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 18px;
+        }
+        #SectionTitle { color: rgba(236,242,250,0.96); font-size: 13px; font-weight: 700; }
+        #InfoLabel { color: rgba(230,237,243,0.78); font-size: 12px; font-weight: 500; }
+        #PageTitle { color: rgba(236,242,250,0.98); font-size: 21px; font-weight: 700; }
+        #Hint { color: rgba(230,237,243,0.68); font-size: 12px; font-weight: 500; }
 
         #Input {
             min-height: 36px;
@@ -2893,16 +3106,17 @@ class BotFactoryApp(QMainWindow):
         QMainWindow[compact="true"] #Hint { font-size: 11px; }
 
         #NavBtn {
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 18px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 16px;
             padding: 12px 14px;
             color: rgba(236,242,250,0.94);
-            font-weight: 700;
+            font-weight: 600;
             text-align: left;
         }
-        #NavBtn:hover { background: rgba(120, 60, 255, 0.08); }
-        #NavBtn[active="true"] {
+        #NavBtn:focus { outline: none; }
+        #NavBtn:hover { background: rgba(255,255,255,0.06); }
+        #NavBtn:checked, #NavBtn[active="true"] {
             background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
                 stop:0 rgba(120, 60, 255, 0.24),
                 stop:1 rgba(0, 200, 255, 0.20));
@@ -2911,7 +3125,7 @@ class BotFactoryApp(QMainWindow):
         #NavBtn:disabled {
             color: rgba(236,242,250,0.72);
         }
-        #NavBtn[active="true"]:disabled {
+        #NavBtn[active="true"]:disabled, #NavBtn:checked:disabled {
             background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
                 stop:0 rgba(120, 60, 255, 0.24),
                 stop:1 rgba(0, 200, 255, 0.20));
@@ -2928,25 +3142,27 @@ class BotFactoryApp(QMainWindow):
 
         #PrimaryBtn {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 rgba(66,146,255,0.98), stop:0.5 rgba(146,86,255,0.98), stop:1 rgba(0,210,255,0.98));
-            border: 1px solid rgba(255,255,255,0.14);
-            border-radius: 18px;
+                stop:0 rgba(76,150,255,0.94), stop:0.5 rgba(150,100,255,0.94), stop:1 rgba(0,200,240,0.94));
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 16px;
             padding: 10px 16px;
             color: rgba(255,255,255,0.98);
-            font-weight: 700;
-        }
-        #PrimaryBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 rgba(60,140,255,0.98), stop:0.5 rgba(150,80,255,0.98), stop:1 rgba(0,210,255,0.98)); }
-
-        #SecondaryBtn {
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.10);
-            border-radius: 18px;
-            padding: 10px 16px;
-            color: rgba(236,242,250,0.96);
             font-weight: 600;
         }
-        #SecondaryBtn:hover { background: rgba(255,255,255,0.10); }
+        #PrimaryBtn:hover {
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 rgba(62,142,255,0.98), stop:0.5 rgba(148,84,255,0.98), stop:1 rgba(0,208,255,0.98));
+        }
+
+        #SecondaryBtn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 10px 16px;
+            color: rgba(236,242,250,0.94);
+            font-weight: 500;
+        }
+        #SecondaryBtn:hover { background: rgba(255,255,255,0.08); }
         #EmojiBtn {
             background: rgba(255,255,255,0.10);
             border: 1px solid rgba(255,255,255,0.14);
@@ -3112,7 +3328,7 @@ class BotFactoryApp(QMainWindow):
         for i, b in enumerate(btns):
             is_active = i == idx
             b.setProperty("active", "true" if is_active else "false")
-            b.setEnabled(not is_active)
+            b.setChecked(is_active)
             b.style().unpolish(b)
             b.style().polish(b)
         try:
@@ -3120,6 +3336,35 @@ class BotFactoryApp(QMainWindow):
         except Exception:
             pass
         animate_section_fade(self.stack.currentWidget(), 180)
+
+    def _apply_compact_layout(self, compact: bool):
+        self.setProperty("compact", "true" if compact else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if compact:
+            self.body_layout.setContentsMargins(10, 10, 10, 10)
+            self.body_layout.setSpacing(10)
+            self.side_layout.setContentsMargins(12, 12, 12, 12)
+            self.side_layout.setSpacing(8)
+            self.sidebar_frame.setFixedWidth(250)
+            self.body_layout.setStretch(0, 1)
+            self.body_layout.setStretch(1, 4)
+            self.logbox.text.setMaximumHeight(170)
+        else:
+            self.body_layout.setContentsMargins(18, 18, 18, 18)
+            self.body_layout.setSpacing(16)
+            self.side_layout.setContentsMargins(18, 18, 18, 18)
+            self.side_layout.setSpacing(10)
+            self.sidebar_frame.setMinimumWidth(0)
+            self.sidebar_frame.setMaximumWidth(16777215)
+            self.body_layout.setStretch(0, 1)
+            self.body_layout.setStretch(1, 3)
+            self.logbox.text.setMaximumHeight(220)
+
+    def _init_compact_state(self):
+        compact = self.width() < 1200 or self.height() < 760
+        self._compact_state = compact
+        self._apply_compact_layout(compact)
 
     def _maybe_first_run(self):
         if getattr(self.cfg, "first_run_done", False):
@@ -3162,29 +3407,15 @@ class BotFactoryApp(QMainWindow):
     def resizeEvent(self, event):
         w = self.width()
         h = self.height()
-        compact = w < 1200 or h < 760
-        self.setProperty("compact", "true" if compact else "false")
-        self.style().unpolish(self)
-        self.style().polish(self)
-        if compact:
-            self.body_layout.setContentsMargins(10, 10, 10, 10)
-            self.body_layout.setSpacing(10)
-            self.side_layout.setContentsMargins(12, 12, 12, 12)
-            self.side_layout.setSpacing(8)
-            self.sidebar_frame.setFixedWidth(250)
-            self.body_layout.setStretch(0, 1)
-            self.body_layout.setStretch(1, 4)
-            self.logbox.text.setMaximumHeight(170)
+        if self._compact_state is None:
+            compact = w < 1200 or h < 760
+        elif self._compact_state:
+            compact = not (w > 1280 and h > 820)
         else:
-            self.body_layout.setContentsMargins(18, 18, 18, 18)
-            self.body_layout.setSpacing(16)
-            self.side_layout.setContentsMargins(18, 18, 18, 18)
-            self.side_layout.setSpacing(10)
-            self.sidebar_frame.setMinimumWidth(0)
-            self.sidebar_frame.setMaximumWidth(16777215)
-            self.body_layout.setStretch(0, 1)
-            self.body_layout.setStretch(1, 3)
-            self.logbox.text.setMaximumHeight(220)
+            compact = w < 1120 or h < 700
+        if compact != self._compact_state:
+            self._compact_state = compact
+            self._apply_compact_layout(compact)
         if hasattr(self, "onboarding_overlay") and self.onboarding_overlay.isVisible():
             self.onboarding_overlay.setGeometry(self.rect())
         super().resizeEvent(event)
@@ -3205,7 +3436,125 @@ class BotFactoryApp(QMainWindow):
             self.auto_page.hamster.addItem(name)
 
     def log(self, s: str):
-        self.logbox.append(s)
+        self.logbox.append(translate_log_message(s, self.cfg.language))
+
+    def translate_text(self, text: str) -> str:
+        if self.cfg.language != "English":
+            return text
+        mapping = {
+            "Ошибка": "Error",
+            "Готово": "Done",
+            "Сброс": "Reset",
+            "Пусто": "Empty",
+            "Нет даты": "No date",
+            "Нет выбора": "No selection",
+            "Нет аккаунтов": "No accounts",
+            "Нет аккаунтов для авторизации.": "No accounts for authorization.",
+            "Введите название хомяка.": "Enter a hamster name.",
+            "Уже работает": "Already running",
+            "Сначала остановите текущий процесс.": "Stop the current process first.",
+            "Введите имена через '/'.": "Enter names separated by '/'.",
+            "Выберите картинку (обязательно).": "Select an image (required).",
+            "Выберите одного бота для единичного удаления.": "Select one bot for single deletion.",
+            "Выберите одного бота для revoke token.": "Select one bot for revoke token.",
+            "Выберите ботов в таблице или укажите usernames для удаления.": "Select bots in the table or enter usernames for deletion.",
+            "Выберите ботов или укажите usernames для массового revoke.": "Select bots or enter usernames for mass revoke.",
+            "Нет выбранных ботов для удаления.": "No bots selected for deletion.",
+            "Введите хотя бы один username.": "Enter at least one username.",
+            "Нет доступных аккаунтов для создания.": "No available accounts for creation.",
+            "Лимит ботов": "Bot limit",
+            "Сколько ботов можно создать на аккаунт за запуск?": "How many bots can be created per account per run?",
+            "Редактировать хомяка": "Edit hamster",
+            "Название:": "Name:",
+            "Процент:": "Percent:",
+            "Сохранить": "Save",
+            "Кастомизация авто-режима": "Auto mode customization",
+            "Имя бота (видимое в Telegram)": "Bot name (visible in Telegram)",
+            "Префикс (будет ПЕРЕД СУФФИКСОМ):": "Prefix (before suffix):",
+            "Суффикс (БУДЕТ ПОСЛЕ ПРЕФИКСА):": "Suffix (after prefix):",
+            "Username бота (адрес @...)": "Bot username (address @...)",
+            "Автоматически приводить username к допустимому виду (латиница/цифры/_)": "Automatically sanitize username (latin/number/_)",
+            "Окончание (пример: cat + _bot → cat_bot):": "Suffix (example: cat + _bot → cat_bot):",
+            "Разделитель перед номером (пример: cat_1bot):": "Separator before number (example: cat_1bot):",
+            "Текст после номера (пример: cat_1bot):": "Text after number (example: cat_1bot):",
+            "Сколько вариантов с номером пробовать:": "How many numbered variants to try:",
+            "Сохранение токенов": "Token saving",
+            "Изменить": "Change",
+            "Куда сохранить tokens.txt": "Where to save tokens.txt",
+            "Куда сохранить tokens.csv": "Where to save tokens.csv",
+            "tokens.txt (только токены):": "tokens.txt (tokens only):",
+            "tokens.csv (для статистики):": "tokens.csv (for stats):",
+            "Применить": "Apply",
+            "Закрыть": "Close",
+            "Санитизировать username": "Sanitize username",
+            "Префикс имени:": "Name prefix:",
+            "Суффикс имени:": "Name suffix:",
+            "Окончание username:": "Username suffix:",
+            "Разделитель перед номером:": "Separator before number:",
+            "Текст после номера:": "Text after number:",
+            "Попыток номеров:": "Number attempts:",
+            "Кастомизация сохранена для:": "Customization saved for:",
+            "Токены не найдены.": "No tokens found.",
+            "Нет дат для токенов.": "No token dates found.",
+            "Выберите дату в списке слева.": "Select a date from the list on the left.",
+            "Отметьте даты галочками слева.": "Select dates on the left.",
+            "Токены сгруппированы по датам. Можно копировать, редактировать и удалять.": "Tokens are grouped by dates. You can copy, edit, and delete them.",
+            "Ручной режим": "Manual mode",
+            "Ручной режим в этой версии использует авто-логику. Рекомендуется авто-режим.": "Manual mode in this version uses auto logic. Auto mode is recommended.",
+            "Код авторизации": "Authorization code",
+            "Введите код для": "Enter code for",
+            "Пароль 2FA": "2FA password",
+            "Введите пароль 2FA для": "Enter 2FA password for",
+            "Массовое удаление": "Mass delete",
+            "Массовый Revoke": "Mass revoke",
+            "Продолжить": "Continue",
+            "Отмена": "Cancel",
+            "Скопировать": "Copy",
+            "ОК": "OK",
+            "Как выбрать ботов для действия: Удаление?": "How to choose bots for delete?",
+            "Как выбрать ботов для действия: Revoke Token?": "How to choose bots for revoke?",
+            "Выбрать в таблице": "Select in table",
+            "Ввести usernames вручную (без @, через /)": "Enter usernames manually (without @, via /)",
+            "Не найдены": "Not found",
+            "Не удалось найти аккаунты для:": "Could not find accounts for:",
+            "Автозапуск": "Autostart",
+            "Автозапуск доступен только в Windows.": "Autostart is available on Windows only.",
+            "Автозапуск включён.": "Autostart enabled.",
+            "Автозапуск отключён.": "Autostart disabled.",
+            "Ошибка автозапуска:": "Autostart error:",
+            "Резервная копия": "Backup",
+            "Резервная копия создана.": "Backup created.",
+            "Ошибка создания:": "Create error:",
+            "Импорт резервной копии": "Import backup",
+            "Резервная копия импортирована. Перезапустите приложение.": "Backup imported. Restart the app.",
+            "Ошибка импорта:": "Import error:",
+            "Настройки сброшены. Перезапустите приложение.": "Settings reset. Restart the app.",
+            "Ошибка сброса:": "Reset error:",
+            "Добавить аккаунты": "Add accounts",
+            "Вставьте аккаунты (по одному в строке).": "Paste accounts (one per line).",
+            "Выберите бота": "Select bot",
+            "Имя бота:": "Bot name:",
+            "Кастомизация авто-режима": "Auto mode customization",
+            "Кастомизация:": "Customization:",
+            "Скопировать": "Copy",
+            "Revoke завершён": "Revoke completed",
+            "Операция завершена. Полученные токены:": "Operation completed. Received tokens:",
+            "Токены не были получены.": "No tokens were received.",
+            "Лимит ботов": "Bot limit",
+            "На аккаунтах достигнут лимит 20 ботов:": "Accounts reached the 20-bot limit:",
+            "ОК": "OK",
+        }
+        if text in mapping:
+            return mapping[text]
+        if text.startswith("Введите код для "):
+            return text.replace("Введите код для ", "Enter code for ")
+        if text.startswith("Введите пароль 2FA для "):
+            return text.replace("Введите пароль 2FA для ", "Enter 2FA password for ")
+        if text.startswith("Кастомизация: "):
+            return text.replace("Кастомизация: ", "Customization: ")
+        if text.startswith("На аккаунтах достигнут лимит 20 ботов:"):
+            return text.replace("На аккаунтах достигнут лимит 20 ботов:", "Accounts reached the 20-bot limit:")
+        return text
 
     def _translations(self) -> Dict[str, Dict[str, str]]:
         return {
@@ -3257,13 +3606,35 @@ class BotFactoryApp(QMainWindow):
                 "stats_delete": "Удалить выбранный",
                 "stats_refresh": "Обновить",
                 "manage_title": "Удаление и Revoke Token",
-                "manage_hint": "Выберите ботов в таблице для массового удаления или revoke токена.",
+                "manage_hint": "Выберите ботов в таблице или введите usernames для массового удаления или revoke токена.",
                 "manage_refresh": "Обновить список",
                 "manage_delete_mass": "Массовое удаление",
                 "manage_delete_single": "Единичное удаление",
                 "manage_revoke_mass": "Массовый Revoke",
                 "manage_revoke_single": "Revoke Token",
                 "manage_open_revoked": "Открыть revoke_tokens.txt",
+                "section_files": "Файлы",
+                "section_run": "Запуск",
+                "section_actions": "Действия",
+                "section_list": "Список",
+                "section_delete": "Удаление",
+                "section_revoke": "Revoke",
+                "section_manage": "Управление",
+                "section_auth": "Авторизация",
+                "bots_table_bot": "Бот",
+                "bots_table_account": "Аккаунт",
+                "bots_table_created": "Создан",
+                "accounts_table_phone": "Телефон",
+                "accounts_table_status": "Статус",
+                "accounts_table_reason": "Причина",
+                "tokens_table_date": "Дата / Токен",
+                "tokens_table_bot": "Бот",
+                "tokens_date_label": "Дата",
+                "stats_table_hamster": "Хомяк",
+                "stats_table_percent": "Процент",
+                "stats_table_bots": "Ботов",
+                "manage_table_bot": "Бот",
+                "manage_table_account": "Аккаунт",
                 "settings_title": "Настройки",
                 "settings_hint": "",
                 "settings_language": "Язык:",
@@ -3274,6 +3645,12 @@ class BotFactoryApp(QMainWindow):
                 "settings_reset": "Сброс до заводских настроек",
                 "settings_onboarding": "Мастер новичка",
                 "settings_support": "Тех. Поддержка",
+                "settings_info_title": "Полезное",
+                "settings_info_tip": "Подсказка: для быстрых операций можно вставлять имена через «/».",
+                "settings_quick_actions": "Быстрые действия",
+                "settings_quick_tokens": "Открыть tokens.txt",
+                "settings_quick_tokens_csv": "Открыть tokens.csv",
+                "settings_quick_revoked": "Открыть revoke_tokens.txt",
                 "onb_auto_title": "Авто‑создание",
                 "onb_auto_body": "• Имена вводите через «/», например: name1/name2/name3.\n• Выберите хомяка — используйте если ботов нашел другой человек\n• Выберите картинку, которая будет назначена всем создаваемым ботам.\n• Нажмите «Запуск (Авто режим)».\n• Лимит ботов на аккаунт можно менять здесь же.",
                 "onb_bots_title": "Боты",
@@ -3337,13 +3714,35 @@ class BotFactoryApp(QMainWindow):
                 "stats_delete": "Delete selected",
                 "stats_refresh": "Refresh",
                 "manage_title": "Delete and Revoke Token",
-                "manage_hint": "Select bots in the table for deletion or token revoke.",
+                "manage_hint": "Select bots in the table or enter usernames for mass delete or revoke.",
                 "manage_refresh": "Refresh list",
                 "manage_delete_mass": "Mass delete",
                 "manage_delete_single": "Single delete",
                 "manage_revoke_mass": "Mass revoke",
                 "manage_revoke_single": "Revoke token",
                 "manage_open_revoked": "Open revoke_tokens.txt",
+                "section_files": "Files",
+                "section_run": "Run",
+                "section_actions": "Actions",
+                "section_list": "List",
+                "section_delete": "Delete",
+                "section_revoke": "Revoke",
+                "section_manage": "Manage",
+                "section_auth": "Authorization",
+                "bots_table_bot": "Bot",
+                "bots_table_account": "Account",
+                "bots_table_created": "Created",
+                "accounts_table_phone": "Phone",
+                "accounts_table_status": "Status",
+                "accounts_table_reason": "Reason",
+                "tokens_table_date": "Date / Token",
+                "tokens_table_bot": "Bot",
+                "tokens_date_label": "Date",
+                "stats_table_hamster": "Hamster",
+                "stats_table_percent": "Percent",
+                "stats_table_bots": "Bots",
+                "manage_table_bot": "Bot",
+                "manage_table_account": "Account",
                 "settings_title": "Settings",
                 "settings_hint": "Manage language, autostart, and backups.",
                 "settings_language": "Language:",
@@ -3354,6 +3753,12 @@ class BotFactoryApp(QMainWindow):
                 "settings_reset": "Factory reset",
                 "settings_onboarding": "Onboarding wizard",
                 "settings_support": "Support",
+                "settings_info_title": "Helpful",
+                "settings_info_tip": "Tip: you can paste names separated by “/” for quick operations.",
+                "settings_quick_actions": "Quick actions",
+                "settings_quick_tokens": "Open tokens.txt",
+                "settings_quick_tokens_csv": "Open tokens.csv",
+                "settings_quick_revoked": "Open revoke_tokens.txt",
                 "onb_auto_title": "Auto creation",
                 "onb_auto_body": "• Enter names using “/”, e.g., name1/name2/name3.\n• Choose a hamster — use this if the bots were found by another person.\n• Choose an image that will be assigned to all created bots.\n• Click “Start (Auto mode)”.\n• Account bot limit can be changed here.",
                 "onb_bots_title": "Bots",
@@ -3386,7 +3791,8 @@ class BotFactoryApp(QMainWindow):
         self.tokens_page.update_language(t)
         self.stats_page.update_language(t)
         self.manage_page.update_language(t)
-        self.settings_page.update_language(t)
+        if hasattr(self, "settings_page") and self.settings_page:
+            self.settings_page.update_language(t)
         self.auto_page.update_limit_hint()
 
     def format_limit_hint(self, limit: int) -> str:
@@ -3406,6 +3812,11 @@ class BotFactoryApp(QMainWindow):
 
     def open_tokens_txt(self):
         path = self.cfg.tokens_txt_path()
+        ensure_file(path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def open_tokens_csv(self):
+        path = self.cfg.tokens_csv_path()
         ensure_file(path)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
@@ -3506,13 +3917,100 @@ class BotFactoryApp(QMainWindow):
     def _selected_manage_targets(self) -> List[Dict[str, str]]:
         return self.manage_page.selected_targets()
 
+    def _resolve_targets_from_usernames(self, usernames: List[str]) -> List[Dict[str, str]]:
+        if not usernames:
+            return []
+        rows = []
+        csv_path = self.cfg.tokens_csv_path()
+        if csv_path.exists():
+            try:
+                with open(csv_path, "r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        rows.append(row)
+            except Exception:
+                pass
+        account_map: Dict[str, str] = {}
+        for row in rows:
+            username = (row.get("username") or "").strip()
+            account = (row.get("account") or row.get("phone") or "").strip()
+            if username and account:
+                account_map[username] = account
+        targets = []
+        missing = []
+        for username in usernames:
+            account = account_map.get(username)
+            if account:
+                targets.append({"username": username, "account": account})
+            else:
+                missing.append(username)
+        if missing:
+            preview = ", ".join(missing[:8])
+            suffix = "..." if len(missing) > 8 else ""
+            show_message(self, "Не найдены", f"Не удалось найти аккаунты для: {preview}{suffix}")
+        return targets
+
+    def _ask_mass_targets(self, title: str, action_label: str) -> Optional[List[Dict[str, str]]]:
+        dlg = StyledDialog(self, self.translate_text(title))
+        dlg.resize(640, 360)
+
+        label = QLabel(self.translate_text(f"Как выбрать ботов для действия: {action_label}?"))
+        label.setWordWrap(True)
+        label.setObjectName("Hint")
+
+        pick_table = QRadioButton(self.translate_text("Выбрать в таблице"))
+        pick_input = QRadioButton(self.translate_text("Ввести usernames вручную (без @, через /)"))
+        pick_table.setChecked(True)
+
+        input_box = QPlainTextEdit()
+        input_box.setObjectName("Input")
+        input_box.setPlaceholderText("username/username2/username3")
+        input_box.setEnabled(False)
+        input_box.setMaximumHeight(110)
+
+        def _sync():
+            input_box.setEnabled(pick_input.isChecked())
+        pick_table.toggled.connect(_sync)
+        pick_input.toggled.connect(_sync)
+
+        row = QHBoxLayout()
+        ok = QPushButton(self.translate_text("Продолжить")); ok.setObjectName("PrimaryBtn")
+        cancel = QPushButton(self.translate_text("Отмена")); cancel.setObjectName("SecondaryBtn")
+        row.addStretch(1)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+
+        body = QVBoxLayout()
+        body.addWidget(label)
+        body.addSpacing(4)
+        body.addWidget(pick_table)
+        body.addWidget(pick_input)
+        body.addWidget(input_box)
+        body.addLayout(row)
+        dlg.set_body_layout(body)
+
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        if pick_input.isChecked():
+            usernames = parse_usernames(input_box.toPlainText())
+            if not usernames:
+                show_message(self, "Ошибка", "Введите хотя бы один username.")
+                return []
+            return self._resolve_targets_from_usernames(usernames)
+        return self._selected_manage_targets()
+
     def delete_mass(self):
         if self.worker and self.worker.isRunning():
             show_message(self, "Уже работает", "Сначала остановите текущий процесс.")
             return
-        targets = self._selected_manage_targets()
+        targets = self._ask_mass_targets("Массовое удаление", "Удаление")
+        if targets is None:
+            return
         if not targets:
-            show_message(self, "Ошибка", "Выберите ботов в таблице для массового удаления.")
+            show_message(self, "Ошибка", "Выберите ботов в таблице или укажите usernames для удаления.")
             return
         self.log(f"[INFO] Массовое удаление: {len(targets)} ботов.")
         self.worker = Worker(
@@ -3586,9 +4084,11 @@ class BotFactoryApp(QMainWindow):
         if self.worker and self.worker.isRunning():
             show_message(self, "Уже работает", "Сначала остановите текущий процесс.")
             return
-        targets = self._selected_manage_targets()
+        targets = self._ask_mass_targets("Массовый Revoke", "Revoke Token")
+        if targets is None:
+            return
         if not targets:
-            show_message(self, "Ошибка", "Выберите ботов для массового revoke.")
+            show_message(self, "Ошибка", "Выберите ботов или укажите usernames для массового revoke.")
             return
         self.log(f"[INFO] Массовый revoke: {len(targets)} ботов.")
         self.worker = Worker(
@@ -3656,7 +4156,7 @@ class BotFactoryApp(QMainWindow):
 
     def open_customization(self):
         # Полностью адаптивная кастомизация: не ломается на любом разрешении (DPI/Scale)
-        dlg = StyledDialog(self, "Кастомизация авто-режима")
+        dlg = StyledDialog(self, self.translate_text("Кастомизация авто-режима"))
         dlg.resize(1100, 700)
         dlg.setMinimumSize(900, 600)
 
@@ -3678,7 +4178,7 @@ class BotFactoryApp(QMainWindow):
             lay.setContentsMargins(20, 20, 20, 20)
             lay.setSpacing(14)
 
-            lbl = QLabel(title)
+            lbl = QLabel(self.translate_text(title))
             lbl.setStyleSheet("font-size:18px;font-weight:1000;")
             lay.addWidget(lbl)
             return card, lay
@@ -3696,8 +4196,8 @@ class BotFactoryApp(QMainWindow):
         w_prefix.setObjectName("Input")
         w_suffix.setObjectName("Input")
 
-        form.addRow("Префикс (будет ПЕРЕД СУФФИКСОМ):", w_prefix)
-        form.addRow("Суффикс (БУДЕТ ПОСЛЕ ПРЕФИКСА):", w_suffix)
+        form.addRow(self.translate_text("Префикс (будет ПЕРЕД СУФФИКСОМ):"), w_prefix)
+        form.addRow(self.translate_text("Суффикс (БУДЕТ ПОСЛЕ ПРЕФИКСА):"), w_suffix)
 
         lay.addLayout(form)
         main.addWidget(card)
@@ -3718,13 +4218,13 @@ class BotFactoryApp(QMainWindow):
         for w in (w_user_suffix, w_sep, w_num, w_max):
             w.setObjectName("Input")
 
-        w_sanitize = QCheckBox("Автоматически приводить username к допустимому виду (латиница/цифры/_)")
+        w_sanitize = QCheckBox(self.translate_text("Автоматически приводить username к допустимому виду (латиница/цифры/_)"))
         w_sanitize.setChecked(bool(getattr(self.cfg, "sanitize_username", True)))
 
-        form.addRow("Окончание (пример: cat + _bot → cat_bot):", w_user_suffix)
-        form.addRow("Разделитель перед номером (пример: cat_1bot):", w_sep)
-        form.addRow("Текст после номера (пример: cat_1bot):", w_num)
-        form.addRow("Сколько вариантов с номером пробовать:", w_max)
+        form.addRow(self.translate_text("Окончание (пример: cat + _bot → cat_bot):"), w_user_suffix)
+        form.addRow(self.translate_text("Разделитель перед номером (пример: cat_1bot):"), w_sep)
+        form.addRow(self.translate_text("Текст после номера (пример: cat_1bot):"), w_num)
+        form.addRow(self.translate_text("Сколько вариантов с номером пробовать:"), w_max)
         form.addRow("", w_sanitize)
 
         lay.addLayout(form)
@@ -3758,8 +4258,8 @@ class BotFactoryApp(QMainWindow):
         w_txt.setObjectName("Input")
         w_csv.setObjectName("Input")
 
-        btn_txt = QPushButton("Изменить")
-        btn_csv = QPushButton("Изменить")
+        btn_txt = QPushButton(self.translate_text("Изменить"))
+        btn_csv = QPushButton(self.translate_text("Изменить"))
         btn_txt.setObjectName("PrimaryBtn")
         btn_csv.setObjectName("PrimaryBtn")
         btn_txt.setFixedHeight(44)
@@ -3768,12 +4268,12 @@ class BotFactoryApp(QMainWindow):
         btn_csv.setMinimumWidth(180)
 
         def pick_txt():
-            p, _ = QFileDialog.getSaveFileName(self, "Куда сохранить tokens.txt", w_txt.text(), "Text (*.txt)")
+            p, _ = QFileDialog.getSaveFileName(self, self.translate_text("Куда сохранить tokens.txt"), w_txt.text(), "Text (*.txt)")
             if p:
                 w_txt.setText(p)
 
         def pick_csv():
-            p, _ = QFileDialog.getSaveFileName(self, "Куда сохранить tokens.csv", w_csv.text(), "CSV (*.csv)")
+            p, _ = QFileDialog.getSaveFileName(self, self.translate_text("Куда сохранить tokens.csv"), w_csv.text(), "CSV (*.csv)")
             if p:
                 w_csv.setText(p)
 
@@ -3790,8 +4290,8 @@ class BotFactoryApp(QMainWindow):
         row2.addWidget(w_csv, 1)
         row2.addWidget(btn_csv)
 
-        form.addRow("tokens.txt (только токены):", row1)
-        form.addRow("tokens.csv (для статистики):", row2)
+        form.addRow(self.translate_text("tokens.txt (только токены):"), row1)
+        form.addRow(self.translate_text("tokens.csv (для статистики):"), row2)
 
         lay.addLayout(form)
         main.addWidget(card)
@@ -3800,8 +4300,8 @@ class BotFactoryApp(QMainWindow):
         btns = QHBoxLayout()
         btns.addStretch(1)
 
-        apply_btn = QPushButton("Применить")
-        close_btn = QPushButton("Закрыть")
+        apply_btn = QPushButton(self.translate_text("Применить"))
+        close_btn = QPushButton(self.translate_text("Закрыть"))
         apply_btn.setObjectName("PrimaryBtn")
         close_btn.setObjectName("SecondaryBtn")
         apply_btn.setFixedHeight(46)
@@ -3875,7 +4375,7 @@ class BotFactoryApp(QMainWindow):
 
     def _open_bot_customization_dialog(self, base_name: str):
         override = self.bot_overrides.get(base_name, {})
-        dlg = StyledDialog(self, f"Кастомизация: {base_name}")
+        dlg = StyledDialog(self, f"{self.translate_text('Кастомизация:')} {base_name}")
         dlg.resize(760, 420)
 
         form = QFormLayout()
@@ -3891,20 +4391,20 @@ class BotFactoryApp(QMainWindow):
         w_sep = QLineEdit(override.get("numbered_separator", self.cfg.numbered_separator)); w_sep.setObjectName("Input")
         w_num = QLineEdit(override.get("numbered_suffix", self.cfg.numbered_suffix)); w_num.setObjectName("Input")
         w_max = QSpinBox(); w_max.setRange(1, 50); w_max.setValue(int(override.get("max_number_attempts", self.cfg.max_number_attempts))); w_max.setObjectName("Input")
-        w_sanitize = QCheckBox("Санитизировать username")
+        w_sanitize = QCheckBox(self.translate_text("Санитизировать username"))
         w_sanitize.setChecked(bool(override.get("sanitize_username", self.cfg.sanitize_username)))
 
-        form.addRow("Префикс имени:", w_prefix)
-        form.addRow("Суффикс имени:", w_suffix)
-        form.addRow("Окончание username:", w_user_suffix)
-        form.addRow("Разделитель перед номером:", w_sep)
-        form.addRow("Текст после номера:", w_num)
-        form.addRow("Попыток номеров:", w_max)
+        form.addRow(self.translate_text("Префикс имени:"), w_prefix)
+        form.addRow(self.translate_text("Суффикс имени:"), w_suffix)
+        form.addRow(self.translate_text("Окончание username:"), w_user_suffix)
+        form.addRow(self.translate_text("Разделитель перед номером:"), w_sep)
+        form.addRow(self.translate_text("Текст после номера:"), w_num)
+        form.addRow(self.translate_text("Попыток номеров:"), w_max)
         form.addRow("", w_sanitize)
 
         btn_row = QHBoxLayout()
-        apply_btn = QPushButton("Применить"); apply_btn.setObjectName("PrimaryBtn")
-        close_btn = QPushButton("Закрыть"); close_btn.setObjectName("SecondaryBtn")
+        apply_btn = QPushButton(self.translate_text("Применить")); apply_btn.setObjectName("PrimaryBtn")
+        close_btn = QPushButton(self.translate_text("Закрыть")); close_btn.setObjectName("SecondaryBtn")
         btn_row.addWidget(apply_btn); btn_row.addWidget(close_btn); btn_row.addStretch(1)
 
         wrap = QVBoxLayout()
@@ -3923,7 +4423,7 @@ class BotFactoryApp(QMainWindow):
                 "max_number_attempts": int(w_max.value()),
                 "sanitize_username": w_sanitize.isChecked(),
             }
-            show_message(self, "Готово", f"Кастомизация сохранена для: {base_name}")
+            show_message(self, "Готово", f"{self.translate_text('Кастомизация сохранена для:')} {base_name}")
             dlg.accept()
 
         apply_btn.clicked.connect(apply)
@@ -3942,6 +4442,10 @@ class BotFactoryApp(QMainWindow):
             pass
 
 def main():
+    if hasattr(Qt.ApplicationAttribute, "AA_UseHighDpiPixmaps"):
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+    if hasattr(Qt.ApplicationAttribute, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
     w = BotFactoryApp()
     w.show()
