@@ -137,7 +137,22 @@ curl -X GET http://155.212.168.79/admin/codes \
   -H "Authorization: Bearer <TOKEN>"
 ```
 
-## 10) Интеграция клиента
+## 10) Быстрая генерация одноразового кода на сервере
+Код одноразовый: его можно активировать только на одном компьютере.
+
+Команда для генерации нового кода прямо в консоли VPS:
+```bash
+cd /opt/botfactory1
+source .venv/bin/activate
+python adminpanel.py generate-code --days 30 --issued-to user1
+```
+
+Вывод будет таким:
+```
+{"code":"XXXX","expires_at":"2026-02-15T20:52:23+00:00"}
+```
+
+## 11) Интеграция клиента
 В `adminapp.py` пропишите URL:
 ```
 ADMIN_API_BASE = "http://155.212.168.79"
@@ -148,13 +163,13 @@ ADMIN_API_BASE = "http://155.212.168.79"
 python adminapp.py
 ```
 
-## 11) Бэкапы базы
+## 12) Бэкапы базы
 SQLite база по умолчанию: `/opt/botfactory1/adminpanel.db`
 ```bash
 cp /opt/botfactory1/adminpanel.db /opt/botfactory1/adminpanel.db.bak
 ```
 
-## 12) Частые ошибки (новичкам)
+## 13) Частые ошибки (новичкам)
 1. **Не открывается сайт** — проверьте, что сервис запущен:
    ```bash
    sudo systemctl status adminpanel.service
