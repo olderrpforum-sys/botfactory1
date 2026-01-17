@@ -1,4 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
@@ -25,6 +27,13 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+manifest_path = Path(__file__).with_name("app.manifest")
+if not manifest_path.exists():
+    raise SystemExit(
+        "Missing app.manifest рядом с TelegramBotFactoryApp.spec. "
+        "Скачай/обнови репозиторий и повтори сборку."
+    )
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -38,9 +47,11 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
+    manifest=str(manifest_path),
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    manifest='app.manifest',
 )
 coll = COLLECT(
     exe,
