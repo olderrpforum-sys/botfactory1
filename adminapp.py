@@ -10,7 +10,7 @@ from typing import Optional
 
 import requests
 
-ADMIN_API_BASE = os.environ.get("ADMIN_API_BASE", "http://127.0.0.1:8000")
+ADMIN_API_BASE = os.environ.get("ADMIN_API_BASE", "http://155.212.168.79:8000")
 LICENSE_FILE = Path(os.environ.get("BOTFACTORY_LICENSE_FILE", Path.home() / ".botfactory_license.json"))
 
 
