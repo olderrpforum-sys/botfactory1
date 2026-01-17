@@ -432,6 +432,51 @@ def show_message(parent: QWidget, title: str, text: str):
     dlg.set_body_layout(body)
     dlg.exec()
 
+def _prompt_activation_code() -> str:
+    while True:
+        dlg = StyledDialog(None, "Активация BotFactory")
+        dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.code = None
+
+        label = QLabel("Введите код доступа:")
+        label.setObjectName("Hint")
+
+        input_box = QLineEdit()
+        input_box.setObjectName("Input")
+        input_box.setEchoMode(QLineEdit.EchoMode.Normal)
+        input_box.setPlaceholderText("Код доступа")
+
+        ok = QPushButton("ОК")
+        ok.setObjectName("PrimaryBtn")
+        ok.setDefault(True)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(ok)
+
+        body = QVBoxLayout()
+        body.addWidget(label)
+        body.addWidget(input_box)
+        body.addLayout(row)
+        dlg.set_body_layout(body)
+
+        def submit():
+            code = input_box.text().strip()
+            if not code:
+                show_message(None, "Ошибка", "Код не может быть пустым.")
+                return
+            dlg.code = code
+            dlg.accept()
+
+        ok.clicked.connect(submit)
+        input_box.returnPressed.connect(submit)
+        dlg.exec()
+        if dlg.code:
+            return dlg.code
+
+
 def ensure_license() -> bool:
     data = adminapp.load_license()
     if data:
@@ -443,18 +488,9 @@ def ensure_license() -> bool:
             return False
 
     while True:
-        code, ok = QInputDialog.getText(
-            None,
-            "Активация BotFactory",
-            "Введите код доступа:",
-            QLineEdit.EchoMode.Normal,
-        )
-        if not ok:
-            return False
-        code = code.strip()
+        code = _prompt_activation_code()
         if not code:
-            show_message(None, "Ошибка", "Код не может быть пустым.")
-            continue
+            return False
         result = adminapp.redeem_code(code)
         if result.get("status") == "active":
             adminapp.save_license(
