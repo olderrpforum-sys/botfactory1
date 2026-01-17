@@ -1,5 +1,8 @@
 # BotFactory — single-file app.py (PyQt6 + Telethon)
 # Requires: Python 3.11, pip install -r requirements.txt
+from license import check_license_or_exit
+check_license_or_exit()
+
 import os
 import sys
 import re
@@ -4767,8 +4770,6 @@ def main():
     if hasattr(Qt.ApplicationAttribute, "AA_EnableHighDpiScaling"):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
-    if not ensure_license():
-        sys.exit(0)
     w = BotFactoryApp()
     w.show()
     sys.exit(app.exec())
