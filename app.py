@@ -13,7 +13,7 @@ import traceback
 import zipfile
 import shutil
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
@@ -62,8 +62,12 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, FloodWaitError
 from telethon.tl.functions.messages import SendMessageRequest
 
+import adminapp
+
 APP_NAME = "BotFactory"
 BYLINE = "by whynot"
+ADMIN_API_BASE = os.environ.get("ADMIN_API_BASE", "http://155.212.168.79:8000")
+adminapp.ADMIN_API_BASE = ADMIN_API_BASE
 
 _CRASH_LOG_HANDLE = None
 
@@ -427,6 +431,52 @@ def show_message(parent: QWidget, title: str, text: str):
     body.addLayout(row)
     dlg.set_body_layout(body)
     dlg.exec()
+
+def ensure_license() -> bool:
+    data = adminapp.load_license()
+    if data:
+        result = adminapp.check_status(data["code"])
+        if result.get("status") == "active":
+            return True
+        if result.get("error") in {"offline_or_invalid", "invalid_response"}:
+            show_message(None, "Ошибка доступа", "Не удалось подключиться к серверу лицензий.")
+            return False
+
+    while True:
+        code, ok = QInputDialog.getText(
+            None,
+            "Активация BotFactory",
+            "Введите код доступа:",
+            QLineEdit.EchoMode.Normal,
+        )
+        if not ok:
+            return False
+        code = code.strip()
+        if not code:
+            show_message(None, "Ошибка", "Код не может быть пустым.")
+            continue
+        result = adminapp.redeem_code(code)
+        if result.get("status") == "active":
+            adminapp.save_license(
+                {
+                    "code": code,
+                    "activated_at": result.get("activated_at")
+                    or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                }
+            )
+            return True
+        error = result.get("error", "unknown")
+        if error == "invalid_response":
+            message = "Сервер лицензий вернул неверный ответ."
+        elif error == "invalid_code":
+            message = "Неверный код доступа."
+        elif error == "revoked":
+            message = "Код был отозван администратором."
+        elif error == "expired":
+            message = "Срок действия кода истёк."
+        else:
+            message = f"Ошибка активации: {error}"
+        show_message(None, "Ошибка активации", message)
 
 def show_copy_dialog(parent: QWidget, title: str, text: str, copy_text: str):
     if parent is not None and hasattr(parent, "translate_text"):
@@ -4681,6 +4731,8 @@ def main():
     if hasattr(Qt.ApplicationAttribute, "AA_EnableHighDpiScaling"):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
+    if not ensure_license():
+        sys.exit(0)
     w = BotFactoryApp()
     w.show()
     sys.exit(app.exec())
