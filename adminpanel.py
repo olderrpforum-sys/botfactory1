@@ -3,9 +3,12 @@ import sqlite3
 import secrets
 import hashlib
 import hmac
+import argparse
+import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, g, render_template_string
@@ -165,6 +168,29 @@ def ensure_default_admin() -> None:
     db.close()
 
 
+def create_access_code(
+    db: sqlite3.Connection,
+    issued_to: Optional[str] = None,
+    expires_in_days: Optional[int] = None,
+    created_by: str = "cli",
+) -> Tuple[str, Optional[str]]:
+    code = secrets.token_urlsafe(10)
+    expires_at = None
+    if expires_in_days:
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_in_days)).isoformat(
+            timespec="seconds"
+        )
+    db.execute(
+        """
+        INSERT INTO access_codes (code, issued_to, expires_at, revoked_at, created_at, created_by)
+        VALUES (?, ?, ?, NULL, ?, ?)
+        """,
+        (code, issued_to, expires_at, _utc_now(), created_by),
+    )
+    db.commit()
+    return code, expires_at
+
+
 def require_admin() -> sqlite3.Row:
     token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:
@@ -238,23 +264,15 @@ def create_code():
     if admin is None:
         return jsonify({"error": "unauthorized"}), 401
     payload = request.get_json(silent=True) or {}
-    code = payload.get("code") or secrets.token_urlsafe(10)
     issued_to = payload.get("issued_to")
     expires_in_days = payload.get("expires_in_days")
-    expires_at = None
-    if expires_in_days:
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=int(expires_in_days))).isoformat(
-            timespec="seconds"
-        )
     db = get_db()
-    db.execute(
-        """
-        INSERT INTO access_codes (code, issued_to, expires_at, revoked_at, created_at, created_by)
-        VALUES (?, ?, ?, NULL, ?, ?)
-        """,
-        (code, issued_to, expires_at, _utc_now(), admin["login"]),
+    code, expires_at = create_access_code(
+        db,
+        issued_to=issued_to,
+        expires_in_days=int(expires_in_days) if expires_in_days else None,
+        created_by=admin["login"],
     )
-    db.commit()
     return jsonify({"code": code, "expires_at": expires_at})
 
 
@@ -355,8 +373,8 @@ def client_redeem():
         db.commit()
 
     usage = db.execute(
-        "SELECT id, used_at FROM code_usages WHERE code_id = ? AND machine_id = ?",
-        (code_row["id"], machine["id"]),
+        "SELECT id, used_at, machine_id FROM code_usages WHERE code_id = ?",
+        (code_row["id"],),
     ).fetchone()
     activated_at = None
     if usage is None:
@@ -366,6 +384,8 @@ def client_redeem():
             (code_row["id"], machine["id"], activated_at),
         )
         db.commit()
+    elif usage["machine_id"] != machine["id"]:
+        return jsonify({"error": "already_used"}), 403
     else:
         activated_at = usage["used_at"]
 
@@ -408,6 +428,36 @@ def client_status():
     return jsonify({"status": "active", "expires_at": code_row["expires_at"]})
 
 
+def _build_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="BotFactory admin panel utilities")
+    subparsers = parser.add_subparsers(dest="command")
+    gen = subparsers.add_parser("generate-code", help="Generate a one-time access code")
+    gen.add_argument("--issued-to", dest="issued_to", default=None)
+    gen.add_argument("--days", dest="days", type=int, default=None)
+    return parser
+
+
+def _handle_cli() -> int:
+    parser = _build_cli_parser()
+    args = parser.parse_args()
+    if not args.command:
+        return 1
+    if args.command == "generate-code":
+        init_db()
+        db = sqlite3.connect(DB_PATH)
+        code, expires_at = create_access_code(
+            db,
+            issued_to=args.issued_to,
+            expires_in_days=args.days,
+            created_by="cli",
+        )
+        print(json.dumps({"code": code, "expires_at": expires_at}, ensure_ascii=False))
+        return 0
+    return 1
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        raise SystemExit(_handle_cli())
     init_db()
     app.run(host="0.0.0.0", port=int(os.environ.get("ADMINPANEL_PORT", "8000")))
