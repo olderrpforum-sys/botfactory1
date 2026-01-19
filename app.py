@@ -67,7 +67,7 @@ from telethon.tl.functions.messages import SendMessageRequest
 
 import adminapp
 
-APP_NAME = "BotFactory"
+APP_NAME = "BOTFACTORY"
 BYLINE = "by whynot"
 ADMIN_API_BASE = os.environ.get("ADMIN_API_BASE", "http://155.212.168.79:8000")
 adminapp.ADMIN_API_BASE = ADMIN_API_BASE
@@ -1642,6 +1642,26 @@ class Worker(QThread):
                 w.writerow(["username", "token", "hamster", "account", "ts"])
             w.writerow([username, token, hamster, account, int(time.time())])
 
+    def _remove_token_rows(self, username: str) -> bool:
+        path = self.cfg.tokens_csv_path()
+        if not path.exists():
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                fieldnames = reader.fieldnames or ["username", "token", "hamster", "account", "ts"]
+                rows = [
+                    row for row in reader
+                    if (row.get("username") or "").strip() != username
+                ]
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+            return True
+        except Exception:
+            return False
+
     def _write_revoked_token(self, username: str, token: str, account: str):
         ensure_file(self.cfg.revoked_tokens_txt_path())
         with open(self.cfg.revoked_tokens_txt_path(), "a", encoding="utf-8") as f:
@@ -1929,6 +1949,7 @@ class Worker(QThread):
                 self.log.emit(f"[WARN] Аккаунт {phone} не найден в accounts_tg.txt.")
                 continue
             self.current_phone = acc["phone"]
+            self.progress.emit(f"Удаление: @{username} | Акк: {acc['phone']}")
             session_path = SESSIONS_DIR / acc["phone"]
             client = TelegramClient(str(session_path), acc["api_id"], acc["api_hash"])
             try:
@@ -1936,6 +1957,7 @@ class Worker(QThread):
                 await self._ensure_auth(client, acc)
                 ok = await self._delete_bot(client, username)
                 if ok:
+                    self._remove_token_rows(username)
                     self.log.emit(f"[OK] Удалён @{username}")
                 else:
                     self.log.emit(f"[ERROR] Не удалось удалить @{username}")
@@ -2231,6 +2253,10 @@ class ManageBotsPage(QWidget):
         c.addWidget(self.title)
         c.addWidget(self.hint)
 
+        content_row = QHBoxLayout()
+        content_row.setSpacing(16)
+
+        left_col = QVBoxLayout()
         self.table = QTableWidget(0, 2)
         self.table.setObjectName("StatsTable")
         configure_table(self.table)
@@ -2239,37 +2265,39 @@ class ManageBotsPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        c.addWidget(self.table)
+        left_col.addWidget(self.table, 1)
+
+        right_col = QVBoxLayout()
+        right_col.setSpacing(10)
+        right_col.setContentsMargins(0, 0, 0, 0)
 
         self.section_data = QLabel("Список"); self.section_data.setObjectName("SectionTitle")
-        c.addWidget(self.section_data)
-        data_row = QHBoxLayout()
         self.refresh = QPushButton("Обновить список"); self.refresh.setObjectName("SecondaryBtn")
-        data_row.addWidget(self.refresh)
-        data_row.addStretch(1)
-        c.addLayout(data_row)
+        right_col.addWidget(self.section_data)
+        right_col.addWidget(self.refresh)
 
         self.section_delete = QLabel("Удаление"); self.section_delete.setObjectName("SectionTitle")
-        c.addWidget(self.section_delete)
-        btn_row = QHBoxLayout()
         self.delete_mass = QPushButton("Массовое удаление"); self.delete_mass.setObjectName("PrimaryBtn")
         self.delete_single = QPushButton("Единичное удаление"); self.delete_single.setObjectName("SecondaryBtn")
-        btn_row.addWidget(self.delete_mass)
-        btn_row.addWidget(self.delete_single)
-        btn_row.addStretch(1)
-        c.addLayout(btn_row)
+        right_col.addSpacing(6)
+        right_col.addWidget(self.section_delete)
+        right_col.addWidget(self.delete_mass)
+        right_col.addWidget(self.delete_single)
 
         self.section_revoke = QLabel("Revoke"); self.section_revoke.setObjectName("SectionTitle")
-        c.addWidget(self.section_revoke)
-        revoke_row = QHBoxLayout()
         self.revoke_mass = QPushButton("Массовый Revoke"); self.revoke_mass.setObjectName("PrimaryBtn")
         self.revoke = QPushButton("Revoke Token"); self.revoke.setObjectName("SecondaryBtn")
         self.open_revoked = QPushButton("Открыть revoke_tokens.txt"); self.open_revoked.setObjectName("SecondaryBtn")
-        revoke_row.addWidget(self.revoke_mass)
-        revoke_row.addWidget(self.revoke)
-        revoke_row.addWidget(self.open_revoked)
-        revoke_row.addStretch(1)
-        c.addLayout(revoke_row)
+        right_col.addSpacing(6)
+        right_col.addWidget(self.section_revoke)
+        right_col.addWidget(self.revoke_mass)
+        right_col.addWidget(self.revoke)
+        right_col.addWidget(self.open_revoked)
+        right_col.addStretch(1)
+
+        content_row.addLayout(left_col, 3)
+        content_row.addLayout(right_col, 1)
+        c.addLayout(content_row, 1)
 
         lay.addWidget(card)
 
@@ -2281,6 +2309,9 @@ class ManageBotsPage(QWidget):
         self.open_revoked.clicked.connect(self.ui.open_revoked_tokens_txt)
 
         self.refresh_table()
+        self.logbox = LogBox()
+        self.ui.register_logbox(self.logbox)
+        lay.addWidget(self.logbox, 1)
 
     def refresh_table(self):
         rows = []
@@ -3248,7 +3279,9 @@ class BotFactoryApp(QMainWindow):
         side.addWidget(foot)
         body.addWidget(sidebar, 1)
 
+        self._logboxes: List[LogBox] = []
         self.logbox = LogBox()
+        self.register_logbox(self.logbox)
         self.stack = QStackedWidget(); self.stack.setObjectName("Stack")
 
         self.auto_page = AutoPage(self)
@@ -3300,9 +3333,9 @@ class BotFactoryApp(QMainWindow):
 
     def _style(self) -> str:
         return """
-        * { font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", "Arial"; }
-        QLabel { color: rgba(232,236,244,0.92); font-weight: 600; margin-bottom: 2px; }
-        QCheckBox { color: rgba(230,237,243,0.92); font-weight: 700; spacing: 10px; }
+        * { font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", "Arial"; font-weight: 700; }
+        QLabel { color: rgba(232,236,244,0.92); font-weight: 700; margin-bottom: 2px; }
+        QCheckBox { color: rgba(230,237,243,0.92); font-weight: 800; spacing: 10px; }
         QCheckBox::indicator {
             width: 18px; height: 18px;
             border-radius: 6px;
@@ -3314,11 +3347,20 @@ class BotFactoryApp(QMainWindow):
             border: 1px solid rgba(255,255,255,0.28);
         }
 
-        QMainWindow { background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
-            stop:0 rgba(8,12,22,255),
-            stop:0.5 rgba(10,16,28,255),
-            stop:1 rgba(12,20,34,255)); }
-        #PremiumTitleBar { background: rgba(10, 14, 24, 0.98); border-bottom: 1px solid rgba(255,255,255,0.06); }
+        QMainWindow {
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                stop:0 rgba(6,10,20,255),
+                stop:0.4 rgba(12,18,34,255),
+                stop:0.7 rgba(10,18,36,255),
+                stop:1 rgba(6,12,26,255));
+        }
+        #PremiumTitleBar {
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                stop:0 rgba(10, 14, 26, 0.98),
+                stop:0.5 rgba(14, 22, 40, 0.98),
+                stop:1 rgba(10, 18, 34, 0.98));
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
         #TitleBarText { color: rgba(230,237,243,0.90); font-weight: 900; font-size: 14px; }
         QPushButton#WinBtn, QPushButton#WinClose {
             background: rgba(255,255,255,0.04);
@@ -3330,28 +3372,44 @@ class BotFactoryApp(QMainWindow):
 
         #Sidebar {
             background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                stop:0 rgba(14,20,36,0.98),
-                stop:1 rgba(10,14,26,0.96));
+                stop:0 rgba(18,26,48,0.98),
+                stop:0.45 rgba(10,16,30,0.98),
+                stop:1 rgba(6,10,20,0.98));
             border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 24px;
+            border-radius: 26px;
         }
-        #BrandTitle { color: rgba(236,242,250,0.98); font-weight: 800; font-size: 24px; letter-spacing: 0.2px; }
-        #BrandBy { color: rgba(230,237,243,0.60); font-weight: 600; font-size: 12px; margin-top: -2px; }
+        #BrandTitle {
+            color: rgba(236,242,250,0.98);
+            font-family: "Serati", "Segoe UI Variable Text", "Segoe UI", "Inter", "Arial";
+            font-style: normal;
+            font-weight: 900;
+            font-size: 28px;
+            letter-spacing: 1px;
+        }
+        #BrandBy { color: rgba(230,237,243,0.65); font-weight: 700; font-size: 12px; margin-top: -6px; }
         #Footer { color: rgba(230,237,243,0.60); font-size: 11px; font-weight: 600; }
 
         #ContentWrap {
-            background: rgba(12,18,34,0.96);
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                stop:0 rgba(10,16,32,0.98),
+                stop:0.5 rgba(12,20,38,0.98),
+                stop:1 rgba(8,14,28,0.96));
             border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 24px;
+            border-radius: 26px;
         }
 
         #Card {
-            background: rgba(12,18,34,0.92);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 22px;
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                stop:0 rgba(10,16,30,0.96),
+                stop:0.55 rgba(12,20,38,0.94),
+                stop:1 rgba(14,22,40,0.96));
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 24px;
         }
         #InfoCard {
-            background: rgba(10,16,30,0.85);
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                stop:0 rgba(10,16,30,0.90),
+                stop:1 rgba(8,14,26,0.90));
             border: 1px solid rgba(255,255,255,0.06);
             border-radius: 18px;
         }
@@ -3363,13 +3421,13 @@ class BotFactoryApp(QMainWindow):
         #Input {
             min-height: 36px;
             background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.10);
             border-radius: 16px;
             padding: 10px 14px;
             color: rgba(236,242,250,0.98);
             font-weight: 600;
         }
-        #Input:focus { border: 1px solid rgba(120, 60, 255, 0.50); background: rgba(255,255,255,0.08); }
+        #Input:focus { border: 1px solid rgba(120, 100, 255, 0.45); background: rgba(255,255,255,0.08); }
         QComboBox QAbstractItemView {
             background: rgba(12,18,34,0.98);
             color: rgba(236,242,250,0.98);
@@ -3398,21 +3456,22 @@ class BotFactoryApp(QMainWindow):
         QMainWindow[compact="true"] #Hint { font-size: 11px; }
 
         #NavBtn {
-            background: rgba(255,255,255,0.03);
+            background: rgba(255,255,255,0.04);
             border: 1px solid rgba(255,255,255,0.06);
             border-radius: 16px;
             padding: 12px 14px;
             color: rgba(236,242,250,0.94);
-            font-weight: 600;
+            font-weight: 800;
             text-align: left;
         }
         #NavBtn:focus { outline: none; }
         #NavBtn:hover { background: rgba(255,255,255,0.06); }
         #NavBtn:checked, #NavBtn[active="true"] {
             background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                stop:0 rgba(120, 60, 255, 0.24),
-                stop:1 rgba(0, 200, 255, 0.20));
-            border: 1px solid rgba(120, 60, 255, 0.30);
+                stop:0 rgba(120, 80, 255, 0.26),
+                stop:0.6 rgba(90, 160, 255, 0.24),
+                stop:1 rgba(0, 190, 255, 0.20));
+            border: 1px solid rgba(255,255,255,0.10);
         }
         #NavBtn:disabled {
             color: rgba(236,242,250,0.72);
@@ -3438,16 +3497,20 @@ class BotFactoryApp(QMainWindow):
 
         #PrimaryBtn {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 rgba(76,150,255,0.94), stop:0.5 rgba(150,100,255,0.94), stop:1 rgba(0,200,240,0.94));
-            border: 1px solid rgba(255,255,255,0.10);
+                stop:0 rgba(90,160,255,0.98),
+                stop:0.5 rgba(160,120,255,0.98),
+                stop:1 rgba(20,210,255,0.98));
+            border: 1px solid rgba(255,255,255,0.12);
             border-radius: 16px;
             padding: 10px 16px;
             color: rgba(255,255,255,0.98);
-            font-weight: 600;
+            font-weight: 700;
         }
         #PrimaryBtn:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 rgba(62,142,255,0.98), stop:0.5 rgba(148,84,255,0.98), stop:1 rgba(0,208,255,0.98));
+                stop:0 rgba(110,180,255,0.98),
+                stop:0.5 rgba(180,130,255,0.98),
+                stop:1 rgba(40,220,255,0.98));
         }
 
         #SecondaryBtn {
@@ -3456,7 +3519,7 @@ class BotFactoryApp(QMainWindow):
             border-radius: 16px;
             padding: 10px 16px;
             color: rgba(236,242,250,0.94);
-            font-weight: 500;
+            font-weight: 600;
         }
         #SecondaryBtn:hover { background: rgba(255,255,255,0.08); }
         #EmojiBtn {
@@ -3558,7 +3621,8 @@ class BotFactoryApp(QMainWindow):
         }
         QTableWidget, QTreeWidget, QTableView, QTreeView, QAbstractScrollArea {
             border-radius: 16px;
-            background: rgba(8, 12, 22, 0.35);
+            background: rgba(8, 12, 22, 0.30);
+            border: 1px solid rgba(255,255,255,0.06);
         }
         QTableView::viewport, QTreeView::viewport, QAbstractScrollArea::viewport {
             border-radius: 16px;
@@ -3757,8 +3821,14 @@ class BotFactoryApp(QMainWindow):
         for name in sorted(self.hamsters.keys()):
             self.auto_page.hamster.addItem(name)
 
+    def register_logbox(self, logbox: LogBox):
+        if logbox not in self._logboxes:
+            self._logboxes.append(logbox)
+
     def log(self, s: str):
-        self.logbox.append(translate_log_message(s, self.cfg.language))
+        msg = translate_log_message(s, self.cfg.language)
+        for box in self._logboxes:
+            box.append(msg)
 
     def translate_text(self, text: str) -> str:
         if self.cfg.language != "English":
@@ -4349,6 +4419,7 @@ class BotFactoryApp(QMainWindow):
         )
         self.worker.log.connect(self.log)
         self.worker.progress.connect(self.log)
+        self.worker.finished_ok.connect(self._on_delete_finished)
         self.worker.start()
 
     def delete_single(self):
@@ -4374,6 +4445,7 @@ class BotFactoryApp(QMainWindow):
         )
         self.worker.log.connect(self.log)
         self.worker.progress.connect(self.log)
+        self.worker.finished_ok.connect(self._on_delete_finished)
         self.worker.start()
 
     def revoke_token(self):
@@ -4474,6 +4546,15 @@ class BotFactoryApp(QMainWindow):
             "Операция завершена. Полученные токены:",
             "\n".join(lines)
         )
+
+    def _on_delete_finished(self):
+        worker = self.worker
+        if not worker or worker.mode != "delete":
+            return
+        self.manage_page.refresh_table()
+        self.bots_page.refresh_table()
+        if hasattr(self.tokens_page, "refresh_view"):
+            self.tokens_page.refresh_view()
 
 
     def open_customization(self):
