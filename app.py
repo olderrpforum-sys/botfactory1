@@ -62,7 +62,7 @@ from PyQt6.QtWidgets import (
 )
 
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError, FloodWaitError
+from telethon.errors import SessionPasswordNeededError, FloodWaitError, PasswordHashInvalidError
 from telethon.tl.functions.messages import SendMessageRequest
 
 import adminapp
@@ -189,10 +189,31 @@ def parse_usernames(raw: str) -> List[str]:
     return result
 
 def extract_try_again_seconds(text: str) -> Optional[int]:
-    m = re.search(r"Please try again in (\d+) seconds", text, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
+    if not text:
+        return None
+    patterns = [
+        r"Please try again in (\d+) seconds",
+        r"Попробуйте снова через (\d+)\s*сек",
+        r"Повторите через (\d+)\s*сек",
+        r"Try again in (\d+) seconds",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
     return None
+
+def extract_created_username(text: str) -> Optional[str]:
+    if not text:
+        return None
+    m = re.search(r"(?:t\.me/|@)([A-Za-z0-9_]{4,})", text)
+    return m.group(1) if m else None
+
+def is_manual_prompt(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return "see the manual" in lowered
 
 def extract_token(text: str) -> Optional[str]:
     # Robust: BotFather token is like 123456789:AA... (base64url-ish)
@@ -1356,6 +1377,7 @@ class Worker(QThread):
         self.remaining_names: List[str] = []
         self.revoked_results: List[Tuple[str, str]] = []
         self.stop_requested = False
+        self.last_freeze_seconds: int = 0
 
     def stop(self):
         self.stop_requested = True
@@ -1369,14 +1391,22 @@ class Worker(QThread):
             return
         await client.send_code_request(acc["phone"])
         code = await self.bridge.get_code(acc["phone"])
-        await client.sign_in(acc["phone"], code)
-        if acc.get("password"):
-            try:
-                await client.sign_in(password=acc["password"])
-            except SessionPasswordNeededError:
-                pwd = await self.bridge.get_password(acc["phone"])
-                if pwd:
-                    await client.sign_in(password=pwd)
+        try:
+            await client.sign_in(acc["phone"], code)
+        except SessionPasswordNeededError:
+            pass
+        if await client.is_user_authorized():
+            return
+        pwd = acc.get("password") or await self.bridge.get_password(acc["phone"])
+        if not pwd:
+            self.log.emit("[ERROR] 2FA пароль не введён.")
+            return
+        try:
+            await client.sign_in(password=pwd)
+        except PasswordHashInvalidError:
+            retry = await self.bridge.get_password(acc["phone"])
+            if retry:
+                await client.sign_in(password=retry)
 
     async def _wait_rate(self, seconds: int):
         self.log.emit(f"[RATE] Ждём {seconds} сек...")
@@ -1451,10 +1481,10 @@ class Worker(QThread):
                 mid = getattr(m, "id", 0)
                 if mid <= current_last:
                     continue
-                current_last = max(current_last, mid)
                 txt = (getattr(m, "raw_text", "") or getattr(m, "message", "") or "")
                 if not txt:
                     continue
+                current_last = max(current_last, mid)
                 lowered = txt.lower()
                 if any(p in lowered for p in expect):
                     return txt
@@ -1486,6 +1516,9 @@ class Worker(QThread):
         if not start_prompt:
             self.log.emit("[WARN] Нет запроса имени от BotFather. (Возможно лимит 20 ботов")
             return None
+        if is_manual_prompt(start_prompt):
+            self.log.emit("[WARN] BotFather прислал ссылку на manual — перезапускаем создание.")
+            return None
         if has_too_many_bots(start_prompt):
             self.account_status[self.current_phone] = {"state": "too_many", "reason": "20+"}
             self.too_many_phones.add(self.current_phone)
@@ -1508,6 +1541,9 @@ class Worker(QThread):
         if not name_prompt:
             self.log.emit("[WARN] Нет запроса username от BotFather. (Возможно лимит 20 ботов")
             return None
+        if is_manual_prompt(name_prompt):
+            self.log.emit("[WARN] BotFather прислал ссылку на manual — перезапускаем создание.")
+            return None
 
         for uname in self._build_username_candidates(base_name):
             if self.stop_requested:
@@ -1523,6 +1559,7 @@ class Worker(QThread):
             sec = extract_try_again_seconds(joined)
             if sec:
                 if sec > self.cfg.freeze_threshold_seconds:
+                    self.last_freeze_seconds = sec
                     return None
                 await self._wait_rate(sec + 1)
                 continue
@@ -1545,6 +1582,10 @@ class Worker(QThread):
 
             if ("Done!" in joined) or ("Congratulations" in joined) or ("You will find it at" in joined):
                 token = extract_token(joined) or ""
+                actual_username = extract_created_username(joined)
+                if actual_username and actual_username.lower() != uname.lower():
+                    self.log.emit(f"[WARN] BotFather выдал другое имя: @{actual_username} вместо @{uname}")
+                    uname = actual_username
                 if not token:
                     for _ in range(12):
                         try:
@@ -1578,12 +1619,13 @@ class Worker(QThread):
             peer,
             last_id,
             ["Choose a bot to change profile photo", "Choose a bot to change profile photo."],
-            timeout=20.0
+            timeout=25.0
         )
         if not choose_prompt:
             self.log.emit("[WARN] Нет запроса выбора бота для аватарки.")
             return
 
+        await asyncio.sleep(self.cfg.force_setuserpic_delay1)
         last = await client.get_messages(peer, limit=1)
         last_id = last[0].id if last else 0
         await client(SendMessageRequest(peer, f"@{username}"))
@@ -1591,7 +1633,7 @@ class Worker(QThread):
         if not ok_prompt:
             self.log.emit("[WARN] Нет подтверждения выбора бота для аватарки.")
             return
-        if "Invalid bot selected" in ok_prompt:
+        if "Invalid bot selected." in ok_prompt or "Invalid bot selected" in ok_prompt:
             self.log.emit("[WARN] Invalid bot selected — повторяем выбор.")
             last = await client.get_messages(peer, limit=1)
             last_id = last[0].id if last else 0
@@ -1600,7 +1642,7 @@ class Worker(QThread):
                 client,
                 peer,
                 last_id,
-                ["OK. Send me the new profile photo", "Send me the new profile photo"],
+                ["OK. Send me the new profile photo for the bot.", "OK. Send me the new profile photo", "Send me the new profile photo"],
                 timeout=20.0
             )
             if not ok_prompt:
@@ -1610,7 +1652,7 @@ class Worker(QThread):
                 client,
                 peer,
                 last_id,
-                ["OK. Send me the new profile photo", "Send me the new profile photo"],
+                ["OK. Send me the new profile photo for the bot.", "OK. Send me the new profile photo", "Send me the new profile photo"],
                 timeout=20.0
             )
             if not ok_prompt:
@@ -1618,14 +1660,15 @@ class Worker(QThread):
                 return
 
         await client.send_file(peer, self.image_path)
+        await asyncio.sleep(self.cfg.force_setuserpic_delay2)
         last = await client.get_messages(peer, limit=1)
         last_id = last[0].id if last else 0
         done = await self._wait_for_message_contains(
             client,
             peer,
             last_id,
-            ["Success! Profile photo updated", "/help"],
-            timeout=25.0
+            ["Success! Profile photo updated. /help", "Success! Profile photo updated", "/help"],
+            timeout=45.0
         )
         if not done:
             self.log.emit("[WARN] Нет подтверждения установки аватарки. (Возможно не успела загрузиться, проверьте вручную)")
@@ -1837,7 +1880,8 @@ class Worker(QThread):
                     names_queue.insert(0, base)
                     msgs = await client.get_messages(self.chat, limit=1)
                     txt = msgs[0].text if msgs else ""
-                    sec = extract_try_again_seconds(txt)
+                    sec = self.last_freeze_seconds or extract_try_again_seconds(txt)
+                    self.last_freeze_seconds = 0
                     if sec and sec > self.cfg.freeze_threshold_seconds:
                         frozen[acc["phone"]] = int(time.time()) + sec + 2
                         save_json(FROZEN_FILE, frozen)
@@ -2824,14 +2868,24 @@ class AccountsAuthWorker(QThread):
                     except SessionPasswordNeededError:
                         pwd = acc.get("password") or await self.bridge.get_password(phone)
                         if pwd:
-                            await client.sign_in(password=pwd)
+                            try:
+                                await client.sign_in(password=pwd)
+                            except PasswordHashInvalidError:
+                                retry = await self.bridge.get_password(phone)
+                                if retry:
+                                    await client.sign_in(password=retry)
                     if not await client.is_user_authorized() and acc.get("password"):
                         try:
                             await client.sign_in(password=acc["password"])
                         except SessionPasswordNeededError:
                             pwd = await self.bridge.get_password(phone)
                             if pwd:
-                                await client.sign_in(password=pwd)
+                                try:
+                                    await client.sign_in(password=pwd)
+                                except PasswordHashInvalidError:
+                                    retry = await self.bridge.get_password(phone)
+                                    if retry:
+                                        await client.sign_in(password=retry)
                 await client(SendMessageRequest(BOTFATHER_USERNAME_DEFAULT, "/start"))
                 await asyncio.sleep(0.8)
                 msgs = await client.get_messages(BOTFATHER_USERNAME_DEFAULT, limit=1)
@@ -3934,6 +3988,8 @@ class BotFactoryApp(QMainWindow):
             "Токены не были получены.": "No tokens were received.",
             "Лимит ботов": "Bot limit",
             "На аккаунтах достигнут лимит 20 ботов:": "Accounts reached the 20-bot limit:",
+            "Перезапуск": "Restart",
+            "Рекомендуется перезапустить авто-режим, чтобы сбросить лимиты/ошибки аккаунтов. Если бот зацикливается на 1-2 аккаунтах, попробуйте снизить лимит на аккаунт и повторить запуск.": "It is recommended to restart auto mode to reset limits/errors. If the bot loops on 1-2 accounts, try lowering the per-account limit and run again.",
             "ОК": "OK",
         }
         if text in mapping:
@@ -4530,6 +4586,12 @@ class BotFactoryApp(QMainWindow):
                 "Нет доступных аккаунтов",
                 "Бот не смог создать ни одного бота за 3 круга аккаунтов.\nОстаток имён для создания:",
                 rest
+            )
+            show_message(
+                self,
+                "Перезапуск",
+                "Рекомендуется перезапустить авто-режим, чтобы сбросить лимиты/ошибки аккаунтов. "
+                "Если бот зацикливается на 1-2 аккаунтах, попробуйте снизить лимит на аккаунт и повторить запуск."
             )
 
     def _on_revoke_finished(self):
