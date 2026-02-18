@@ -18,7 +18,7 @@ import shutil
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Callable
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QSize, QPoint, QPointF, QRect, QRectF, QPropertyAnimation, QEasingCurve, QUrl
 from PyQt6 import sip
@@ -58,11 +58,19 @@ from PyQt6.QtWidgets import (
     QGraphicsOpacityEffect,
     QToolButton,
     QMenu,
-    QButtonGroup
+    QButtonGroup,
+    QStyle,
+    QListWidget,
+    QListWidgetItem
 )
 
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError, FloodWaitError, PasswordHashInvalidError
+from telethon.errors import (
+    SessionPasswordNeededError,
+    FloodWaitError,
+    PasswordHashInvalidError,
+    SendCodeUnavailableError,
+)
 from telethon.tl.functions.messages import SendMessageRequest
 
 import adminapp
@@ -222,6 +230,33 @@ def extract_token(text: str) -> Optional[str]:
 
 def has_too_many_bots(text: str) -> bool:
     return "can't add more than 20 bots" in (text or "").lower()
+
+async def request_login_code(
+    client: TelegramClient,
+    phone: str,
+    log: pyqtSignal,
+    stop_cb: Optional[Callable[[], bool]] = None,
+) -> bool:
+    try:
+        await client.send_code_request(phone)
+        return True
+    except SendCodeUnavailableError:
+        if getattr(client, "_phone_code_hash", None):
+            log.emit("[WARN] Код уже был отправлен ранее. Используйте последний код или подождите перед повторной отправкой.")
+            return False
+        log.emit("[ERROR] Нельзя повторно запросить код сейчас. Подождите и попробуйте позже.")
+        raise
+    except FloodWaitError as e:
+        log.emit(f"[RATE] FloodWait {e.seconds}s. Ждём.")
+        if stop_cb:
+            for _ in range(e.seconds):
+                if stop_cb():
+                    return False
+                await asyncio.sleep(1)
+        else:
+            await asyncio.sleep(e.seconds)
+        await client.send_code_request(phone)
+        return True
 def sanitize_base(base: str) -> str:
     b = base.lower()
     b = re.sub(r"[^a-z0-9_]", "", b)
@@ -277,6 +312,12 @@ def configure_table(widget):
         widget.horizontalHeader().setStretchLastSection(True)
     except Exception:
         pass
+
+def set_table_readonly(widget):
+    try:
+        widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    except Exception:
+        pass
     try:
         widget.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     except Exception:
@@ -289,6 +330,43 @@ def configure_table(widget):
         widget.setWordWrap(False)
     except Exception:
         pass
+
+def create_neon_search_icon(size: int = 18, color: QColor = QColor(0, 220, 255)) -> QIcon:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(color, 2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    r = size * 0.35
+    center = QPointF(size * 0.45, size * 0.45)
+    painter.drawEllipse(center, r, r)
+    painter.drawLine(QPointF(size * 0.62, size * 0.62), QPointF(size * 0.88, size * 0.88))
+    painter.end()
+    return QIcon(pixmap)
+
+def animate_neon_pulse(btn: QWidget, base_color: QColor = QColor(0, 220, 255)):
+    if btn is None or not btn.isVisible():
+        return
+    effect = QGraphicsDropShadowEffect(btn)
+    effect.setOffset(0, 0)
+    effect.setColor(base_color)
+    effect.setBlurRadius(12)
+    btn.setGraphicsEffect(effect)
+    anim = QPropertyAnimation(effect, b"blurRadius", btn)
+    anim.setStartValue(10)
+    anim.setKeyValueAt(0.35, 20)
+    anim.setKeyValueAt(0.6, 32)
+    anim.setKeyValueAt(0.8, 18)
+    anim.setEndValue(12)
+    anim.setDuration(420)
+    anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+    def _cleanup():
+        if is_widget_alive(btn):
+            btn.setGraphicsEffect(None)
+    anim.finished.connect(_cleanup)
+    anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 def animate_fade(widget: QWidget, start: float = 0.0, end: float = 1.0, duration: int = 260):
     if widget is None:
@@ -304,7 +382,8 @@ def animate_fade(widget: QWidget, start: float = 0.0, end: float = 1.0, duration
     anim.setDuration(duration)
     anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
     def _cleanup():
-        widget.setGraphicsEffect(None)
+        if is_widget_alive(widget):
+            widget.setGraphicsEffect(None)
     anim.finished.connect(_cleanup)
     anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
@@ -320,7 +399,8 @@ def animate_section_fade(widget: QWidget, duration: int = 220):
     anim.setDuration(duration)
     anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
     def _cleanup():
-        widget.setGraphicsEffect(None)
+        if is_widget_alive(widget):
+            widget.setGraphicsEffect(None)
     anim.finished.connect(_cleanup)
     anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
@@ -339,7 +419,8 @@ def animate_button_press(btn: QWidget, duration: int = 160):
     anim.setDuration(duration)
     anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
     def _cleanup():
-        btn.setGraphicsEffect(None)
+        if is_widget_alive(btn):
+            btn.setGraphicsEffect(None)
     anim.finished.connect(_cleanup)
     anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
@@ -429,6 +510,8 @@ class ActionAnimator(QObject):
             if isinstance(obj, QWidget) and obj.property("noPressAnim"):
                 return super().eventFilter(obj, event)
             animate_button_press(obj)
+            if isinstance(obj, QPushButton) and obj.text().strip():
+                animate_neon_pulse(obj)
         return super().eventFilter(obj, event)
 
 def show_message(parent: QWidget, title: str, text: str):
@@ -1389,7 +1472,7 @@ class Worker(QThread):
     async def _ensure_auth(self, client: TelegramClient, acc: Dict):
         if await client.is_user_authorized():
             return
-        await client.send_code_request(acc["phone"])
+        await request_login_code(client, acc["phone"], self.log, stop_cb=lambda: self.stop_requested)
         code = await self.bridge.get_code(acc["phone"])
         try:
             await client.sign_in(acc["phone"], code)
@@ -2233,6 +2316,7 @@ class BotsPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        set_table_readonly(self.table)
         c.addWidget(self.table)
 
         self.actions_label = QLabel("Действия"); self.actions_label.setObjectName("SectionTitle")
@@ -2309,6 +2393,7 @@ class ManageBotsPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        set_table_readonly(self.table)
         left_col.addWidget(self.table, 1)
 
         right_col = QVBoxLayout()
@@ -2558,6 +2643,7 @@ class TokensPage(QWidget):
         configure_table(self.tree)
         self.tree.setHeaderLabels(["Дата / Токен", "Бот"])
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        set_table_readonly(self.tree)
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(18)
         self.tree.setRootIsDecorated(True)
@@ -2861,7 +2947,7 @@ class AccountsAuthWorker(QThread):
             try:
                 await client.connect()
                 if not await client.is_user_authorized():
-                    await client.send_code_request(phone)
+                    await request_login_code(client, phone, self.log)
                     code = await self.bridge.get_code(phone)
                     try:
                         await client.sign_in(phone, code)
@@ -2926,6 +3012,7 @@ class AccountsPage(QWidget):
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        set_table_readonly(self.table)
         try:
             self.table.setCornerButtonEnabled(False)
         except Exception:
@@ -2951,8 +3038,10 @@ class AccountsPage(QWidget):
         manage_row = QHBoxLayout()
         self.add_btn = QPushButton("Добавить аккаунты"); self.add_btn.setObjectName("SecondaryBtn")
         self.delete_btn = QPushButton("Удалить аккаунт"); self.delete_btn.setObjectName("SecondaryBtn")
+        self.edit_btn = QPushButton("Редактировать"); self.edit_btn.setObjectName("SecondaryBtn")
         self.refresh = QPushButton("Обновить"); self.refresh.setObjectName("SecondaryBtn")
         manage_row.addWidget(self.add_btn)
+        manage_row.addWidget(self.edit_btn)
         manage_row.addWidget(self.delete_btn)
         manage_row.addWidget(self.refresh)
         manage_row.addStretch(1)
@@ -2969,18 +3058,22 @@ class AccountsPage(QWidget):
         c.addLayout(auth_row)
 
         self.add_btn.clicked.connect(self.add_accounts)
+        self.edit_btn.clicked.connect(self.edit_account)
         self.delete_btn.clicked.connect(self.delete_account)
         self.auth_all.clicked.connect(lambda: self.authorize_accounts(False))
         self.auth_failed.clicked.connect(lambda: self.authorize_accounts(True))
         self.refresh.clicked.connect(self.refresh_table)
+        self.table.itemSelectionChanged.connect(self._update_actions_state)
 
         lay.addWidget(card)
         self.refresh_table()
+        self._update_actions_state()
 
     def update_language(self, t: Dict[str, str]):
         self.title.setText(t["accounts_title"])
         self.hint.setText(t["accounts_hint"])
         self.add_btn.setText(t["accounts_add"])
+        self.edit_btn.setText(t["accounts_edit"])
         self.delete_btn.setText(t["accounts_delete"])
         self.auth_all.setText(t["accounts_auth_all"])
         self.auth_failed.setText(t["accounts_auth_failed"])
@@ -3027,6 +3120,7 @@ class AccountsPage(QWidget):
                     continue
                 f.write(f"{line}\n")
         self.refresh_table()
+        self._update_actions_state()
 
     def delete_account(self):
         r = self.table.currentRow()
@@ -3052,6 +3146,100 @@ class AccountsPage(QWidget):
             self.ui.save_account_status()
             self.refresh_table()
         animate_evaporate_rect(self.table.viewport(), rect, _finish)
+
+    def _update_actions_state(self):
+        has_row = self.table.currentRow() >= 0
+        self.edit_btn.setEnabled(has_row)
+        self.delete_btn.setEnabled(has_row)
+
+    def edit_account(self):
+        r = self.table.currentRow()
+        if r < 0:
+            return
+        phone = self.table.item(r, 0).text().strip()
+        accounts = parse_accounts(ACCOUNTS_FILE)
+        acc = next((a for a in accounts if a["phone"] == phone), None)
+        if not acc:
+            show_message(self, "Ошибка", "Аккаунт не найден.")
+            return
+
+        dlg = StyledDialog(self, self.ui.translate_text("Редактировать аккаунт"))
+        dlg.resize(720, 360)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(24)
+        form.setVerticalSpacing(14)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        phone_input = QLineEdit(acc["phone"]); phone_input.setObjectName("Input")
+        pwd_input = QLineEdit(acc.get("password") or ""); pwd_input.setObjectName("Input")
+        api_id_input = QLineEdit(str(acc.get("api_id", ""))); api_id_input.setObjectName("Input")
+        api_hash_input = QLineEdit(acc.get("api_hash", "")); api_hash_input.setObjectName("Input")
+
+        form.addRow(self.ui.translate_text("Телефон:"), phone_input)
+        form.addRow(self.ui.translate_text("Пароль 2FA (если нет — оставьте пустым):"), pwd_input)
+        form.addRow(self.ui.translate_text("API ID:"), api_id_input)
+        form.addRow(self.ui.translate_text("API Hash:"), api_hash_input)
+        dlg.body.addLayout(form)
+
+        row = QHBoxLayout()
+        ok = QPushButton(self.ui.translate_text("Сохранить")); ok.setObjectName("PrimaryBtn")
+        cancel = QPushButton(self.ui.translate_text("Отмена")); cancel.setObjectName("SecondaryBtn")
+        row.addWidget(ok); row.addWidget(cancel); row.addStretch(1)
+        dlg.body.addLayout(row)
+
+        def do_ok():
+            new_phone = phone_input.text().strip()
+            if not new_phone:
+                show_message(self, "Ошибка", "Телефон не может быть пустым.")
+                return
+            api_id_text = api_id_input.text().strip()
+            if not api_id_text.isdigit():
+                show_message(self, "Ошибка", "API ID должен быть числом.")
+                return
+            api_hash = api_hash_input.text().strip()
+            if not api_hash:
+                show_message(self, "Ошибка", "API Hash не может быть пустым.")
+                return
+            if new_phone != phone and any(a["phone"] == new_phone for a in accounts):
+                show_message(self, "Ошибка", "Аккаунт с таким телефоном уже существует.")
+                return
+
+            pwd = pwd_input.text().strip() or "UNKOWN"
+            new_line = f"{new_phone}:{pwd}:{api_id_text}:{api_hash}"
+
+            lines = ACCOUNTS_FILE.read_text(encoding="utf-8").splitlines() if ACCOUNTS_FILE.exists() else []
+            updated = []
+            for line in lines:
+                if line.startswith(f"{phone}:"):
+                    updated.append(new_line)
+                else:
+                    updated.append(line)
+            ensure_file(ACCOUNTS_FILE)
+            ACCOUNTS_FILE.write_text("\n".join(updated) + ("\n" if updated else ""), encoding="utf-8")
+
+            if new_phone != phone:
+                for ext in [".session", ".session-journal"]:
+                    old_path = (SESSIONS_DIR / phone).with_suffix(ext)
+                    new_path = (SESSIONS_DIR / new_phone).with_suffix(ext)
+                    if old_path.exists():
+                        try:
+                            old_path.replace(new_path)
+                        except Exception:
+                            pass
+                if phone in self.ui.account_status:
+                    self.ui.account_status[new_phone] = self.ui.account_status.pop(phone)
+                    self.ui.save_account_status()
+
+            dlg.accept()
+
+        ok.clicked.connect(do_ok)
+        cancel.clicked.connect(dlg.reject)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_table()
 
     def authorize_accounts(self, only_errors: bool):
         accounts = parse_accounts(ACCOUNTS_FILE)
@@ -3309,7 +3497,25 @@ class BotFactoryApp(QMainWindow):
 
         brand = QLabel(APP_NAME); brand.setObjectName("BrandTitle")
         by = QLabel(BYLINE); by.setObjectName("BrandBy")
-        side.addWidget(brand); side.addWidget(by); side.addSpacing(10)
+        by.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        by.setIndent(6)
+        self.global_search = QLineEdit(); self.global_search.setObjectName("Input")
+        self.global_search.setPlaceholderText("Поиск по ботам...")
+        self.global_search.setTextMargins(0, 0, 38, 0)
+        self.search_button = QToolButton(self.global_search)
+        self.search_button.setObjectName("SearchBtn")
+        self.search_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.search_button.setIcon(create_neon_search_icon())
+        self.search_button.setIconSize(QSize(16, 16))
+        self.search_button.setFixedSize(28, 28)
+        self.search_button.setAutoRaise(True)
+        self.search_button.setToolTip(self.translate_text("Поиск"))
+        self.search_button.clicked.connect(self._handle_global_search)
+        self._position_search_button()
+        self.global_search.installEventFilter(self)
+        QTimer.singleShot(0, self._position_search_button)
+        side.addWidget(brand); side.addWidget(by); side.addSpacing(6)
+        side.addWidget(self.global_search); side.addSpacing(10)
 
         self.btn_auto = QPushButton("Автоматическое создание"); self.btn_auto.setObjectName("NavBtn")
         self.btn_bots = QPushButton("Боты"); self.btn_bots.setObjectName("NavBtn")
@@ -3385,6 +3591,12 @@ class BotFactoryApp(QMainWindow):
         QTimer.singleShot(200, self._maybe_first_run)
         self.auto_page_update_hamsters()
 
+    def eventFilter(self, obj, event):
+        if hasattr(self, "global_search") and obj is self.global_search:
+            if event.type() in (event.Type.Resize, event.Type.Show):
+                self._position_search_button()
+        return super().eventFilter(obj, event)
+
     def _style(self) -> str:
         return """
         * { font-family: "Segoe UI Variable Text", "Segoe UI", "Inter", "Arial"; font-weight: 700; }
@@ -3440,7 +3652,7 @@ class BotFactoryApp(QMainWindow):
             font-size: 28px;
             letter-spacing: 1px;
         }
-        #BrandBy { color: rgba(230,237,243,0.65); font-weight: 700; font-size: 12px; margin-top: -6px; }
+        #BrandBy { color: rgba(230,237,243,0.65); font-weight: 700; font-size: 12px; margin-top: -2px; }
         #Footer { color: rgba(230,237,243,0.60); font-size: 11px; font-weight: 600; }
 
         #ContentWrap {
@@ -3649,6 +3861,18 @@ class BotFactoryApp(QMainWindow):
         QSpinBox::up-button { subcontrol-position: top right; border-top-right-radius: 12px; }
         QSpinBox::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 12px; }
 
+        #SearchBtn {
+            border: none;
+            background: rgba(0, 220, 255, 0.10);
+            border-radius: 10px;
+        }
+        #SearchBtn:hover {
+            background: rgba(0, 220, 255, 0.18);
+        }
+        #SearchBtn:pressed {
+            background: rgba(0, 220, 255, 0.24);
+        }
+
         #LogBox {
             background: rgba(8, 12, 22, 0.55);
             border: 1px solid rgba(255,255,255,0.06);
@@ -3750,6 +3974,151 @@ class BotFactoryApp(QMainWindow):
         except Exception:
             pass
         animate_section_fade(self.stack.currentWidget(), 180)
+
+    def _handle_global_search(self):
+        query = self.global_search.text().strip().lower()
+        if not query:
+            return
+        animate_neon_pulse(self.search_button)
+        results = self._find_bot_matches(query)
+        if not results:
+            show_message(self, self.translate_text("Поиск"), self.translate_text("Совпадения не найдены."))
+            return
+        self._show_search_results(query, results)
+
+    def _find_bot_matches(self, query: str):
+        results = {}
+        t = self._translations().get(self.cfg.language, self._translations()["Русский"])
+
+        bots_table = self.bots_page.table
+        bot_rows = []
+        for row in range(bots_table.rowCount()):
+            item = bots_table.item(row, 0)
+            if item and query in item.text().lower():
+                bot_rows.append(row)
+        if bot_rows:
+            results[t["nav_bots"]] = {"page": 1, "rows": bot_rows, "table": bots_table}
+
+        manage_table = self.manage_page.table
+        manage_rows = []
+        for row in range(manage_table.rowCount()):
+            item = manage_table.item(row, 0)
+            if item and query in item.text().lower():
+                manage_rows.append(row)
+        if manage_rows:
+            results[t["nav_manage"]] = {"page": 5, "rows": manage_rows, "table": manage_table}
+
+        tree = self.tokens_page.tree
+        token_items = []
+        for i in range(tree.topLevelItemCount()):
+            parent = tree.topLevelItem(i)
+            for j in range(parent.childCount()):
+                child = parent.child(j)
+                if query in child.text(1).lower():
+                    token_items.append((parent, child))
+        if token_items:
+            results[t["nav_tokens"]] = {"page": 3, "items": token_items, "tree": tree}
+
+        return results
+
+    def _show_search_results(self, query: str, results: Dict[str, Dict]):
+        dlg = StyledDialog(self, self.translate_text("Результаты поиска"))
+        dlg.resize(620, 420)
+
+        hint = QLabel(self.translate_text(f"Найдено совпадений по «{query}» в разделах:"))
+        hint.setWordWrap(True)
+        dlg.body.addWidget(hint)
+
+        list_widget = QListWidget()
+        list_widget.setObjectName("StatsTable")
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        list_widget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        configure_table(list_widget)
+        dlg.body.addWidget(list_widget, 1)
+
+        for section, data in results.items():
+            if "rows" in data:
+                count = len(data["rows"])
+            else:
+                count = len(data["items"])
+            item = QListWidgetItem(f"{section} — {count}")
+            item.setData(Qt.ItemDataRole.UserRole, section)
+            list_widget.addItem(item)
+
+        btn_row = QHBoxLayout()
+        open_btn = QPushButton(self.translate_text("Открыть")); open_btn.setObjectName("PrimaryBtn")
+        cancel_btn = QPushButton(self.translate_text("Отмена")); cancel_btn.setObjectName("SecondaryBtn")
+        open_btn.setEnabled(False)
+        btn_row.addWidget(open_btn); btn_row.addWidget(cancel_btn); btn_row.addStretch(1)
+        dlg.body.addLayout(btn_row)
+
+        def select_item():
+            current = list_widget.currentItem()
+            if not current:
+                return
+            section = current.data(Qt.ItemDataRole.UserRole)
+            data = results.get(section)
+            if not data:
+                return
+            self._nav(data["page"])
+            if "rows" in data:
+                row = data["rows"][0]
+                self._flash_table_row(data["table"], row)
+            else:
+                parent, child = data["items"][0]
+                self._flash_tree_item(data["tree"], parent, child)
+            dlg.accept()
+
+        list_widget.currentItemChanged.connect(lambda *_: open_btn.setEnabled(list_widget.currentItem() is not None))
+        list_widget.itemDoubleClicked.connect(lambda *_: select_item())
+        open_btn.clicked.connect(select_item)
+        cancel_btn.clicked.connect(dlg.reject)
+
+        dlg.exec()
+
+    def _flash_table_row(self, table: QTableWidget, row: int):
+        items = []
+        originals = []
+        for col in range(table.columnCount()):
+            item = table.item(row, col)
+            if item:
+                items.append(item)
+                originals.append(item.background())
+                item.setBackground(QBrush(QColor(255, 214, 120, 160)))
+        if items:
+            table.setCurrentItem(items[0])
+            table.scrollToItem(items[0], QAbstractItemView.ScrollHint.PositionAtCenter)
+        def restore():
+            for item, brush in zip(items, originals):
+                item.setBackground(brush)
+        QTimer.singleShot(2000, restore)
+
+    def _flash_tree_item(self, tree: QTreeWidget, parent: QTreeWidgetItem, child: QTreeWidgetItem):
+        parent.setExpanded(True)
+        tree.setCurrentItem(child)
+        tree.scrollToItem(child, QAbstractItemView.ScrollHint.PositionAtCenter)
+        originals = [child.background(0), child.background(1)]
+        highlight = QBrush(QColor(255, 214, 120, 160))
+        child.setBackground(0, highlight)
+        child.setBackground(1, highlight)
+
+        def restore():
+            child.setBackground(0, originals[0])
+            child.setBackground(1, originals[1])
+
+        QTimer.singleShot(2000, restore)
+
+    def _position_search_button(self):
+        if not hasattr(self, "global_search") or not hasattr(self, "search_button"):
+            return
+        if not self.global_search or not self.search_button:
+            return
+        btn_size = self.search_button.size()
+        x = self.global_search.width() - btn_size.width() - 8
+        y = (self.global_search.height() - btn_size.height()) // 2
+        self.search_button.move(max(0, x), max(0, y))
+        self.search_button.raise_()
+        self.search_button.show()
 
     def _apply_compact_layout(self, compact: bool):
         self.setProperty("compact", "true" if compact else "false")
@@ -3858,6 +4227,7 @@ class BotFactoryApp(QMainWindow):
             self._apply_compact_layout(compact)
         if hasattr(self, "onboarding_overlay") and self.onboarding_overlay.isVisible():
             self.onboarding_overlay.setGeometry(self.rect())
+        self._position_search_button()
         super().resizeEvent(event)
 
     def save_config(self):
@@ -3955,6 +4325,10 @@ class BotFactoryApp(QMainWindow):
             "Массовый Revoke": "Mass revoke",
             "Продолжить": "Continue",
             "Отмена": "Cancel",
+            "Поиск": "Search",
+            "Совпадения не найдены.": "No matches found.",
+            "Результаты поиска": "Search results",
+            "Открыть": "Open",
             "Скопировать": "Copy",
             "ОК": "OK",
             "Как выбрать ботов для действия: Удаление?": "How to choose bots for delete?",
@@ -4014,6 +4388,7 @@ class BotFactoryApp(QMainWindow):
                 "nav_stats": "Статистика",
                 "nav_manage": "Удаление / Revoke",
                 "nav_settings": "Настройки",
+                "search_placeholder": "Поиск по ботам...",
                 "auto_title": "Автоматическое создание",
                 "auto_chat": "Чат:",
                 "auto_names": "Имена:",
@@ -4033,6 +4408,7 @@ class BotFactoryApp(QMainWindow):
                 "accounts_title": "Аккаунты",
                 "accounts_hint": "Управление аккаунтами и авторизацией.",
                 "accounts_add": "Добавить аккаунты",
+                "accounts_edit": "Редактировать",
                 "accounts_delete": "Удалить аккаунт",
                 "accounts_auth_all": "Авторизовать все",
                 "accounts_auth_failed": "Авторизовать ошибки",
@@ -4122,6 +4498,7 @@ class BotFactoryApp(QMainWindow):
                 "nav_stats": "Stats",
                 "nav_manage": "Delete / Revoke",
                 "nav_settings": "Settings",
+                "search_placeholder": "Search bots...",
                 "auto_title": "Auto creation",
                 "auto_chat": "Chat:",
                 "auto_names": "Names:",
@@ -4141,6 +4518,7 @@ class BotFactoryApp(QMainWindow):
                 "accounts_title": "Accounts",
                 "accounts_hint": "Manage accounts and authorization.",
                 "accounts_add": "Add accounts",
+                "accounts_edit": "Edit",
                 "accounts_delete": "Delete account",
                 "accounts_auth_all": "Authorize all",
                 "accounts_auth_failed": "Authorize failed",
@@ -4233,6 +4611,10 @@ class BotFactoryApp(QMainWindow):
         self.btn_stats.setText(t["nav_stats"])
         self.btn_manage.setText(t["nav_manage"])
         self.btn_settings.setText(t["nav_settings"])
+        if hasattr(self, "global_search") and self.global_search:
+            self.global_search.setPlaceholderText(t["search_placeholder"])
+        if hasattr(self, "search_button") and self.search_button:
+            self.search_button.setToolTip(self.translate_text("Поиск"))
         self.auto_page.update_language(t)
         self.bots_page.update_language(t)
         self.accounts_page.update_language(t)
